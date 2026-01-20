@@ -33,6 +33,7 @@ type Method = "card" | "pix" | "boleto";
 /* CONFIG (VOCÊ TROCA OS LINKS) */
 /* ------------------------------------------------------------------ */
 const PIX_ICON_URL = "/cdn/pay/pix.png";
+const BOLETO_ICON_URL = "/cdn/pay/Boleto.svg";
 const VISA_LOGO_URL = "/cdn/pay/visa.svg";
 const MC_LOGO_URL = "/cdn/pay/mastercard.svg";
 const ELO_LOGO_URL = "/cdn/pay/elo.svg";
@@ -708,6 +709,18 @@ function PixImg(props: { className?: string }) {
     <img
       src={PIX_ICON_URL}
       alt="Pix"
+      className={props.className}
+      style={{ objectFit: "contain" }}
+      draggable={false}
+    />
+  );
+}
+
+function BoletoImg(props: { className?: string }) {
+  return (
+    <img
+      src={BOLETO_ICON_URL}
+      alt="Boleto"
       className={props.className}
       style={{ objectFit: "contain" }}
       draggable={false}
@@ -1567,6 +1580,9 @@ export default function Pay({
   const [couponValidating, setCouponValidating] = useState(false);
   const [couponError, setCouponError] = useState<string | null>(null);
   const couponRef = useRef<HTMLInputElement | null>(null);
+  const couponBoxRef = useRef<HTMLDivElement | null>(null);
+  const couponInteractedRef = useRef(false);
+
   const lastAppliedRef = useRef<string>("");
 
   // PIX ( agora real)
@@ -1625,12 +1641,25 @@ export default function Pay({
             `/api/pagment?id=${encodeURIComponent(paymentId)}`,
             {
               method: "GET",
-              headers: { "Content-Type": "application/json" },
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              credentials: "include",
               cache: "no-store",
             },
           );
 
-          const j = await r.json();
+          // ✅ se a API negar (sessão/cookie não foi junto), para polling e mostra motivo
+          if (r.status === 401 || r.status === 403) {
+            stopPolling();
+            setLiveStatusDetail(
+              "Sessão expirada ou sem permissão. Faça login novamente e gere o pagamento de novo.",
+            );
+            return;
+          }
+
+          const j = await r.json().catch(() => null);
           if (!r.ok || !j?.ok) return;
 
           const status = String(j.status || "");
@@ -1899,6 +1928,26 @@ export default function Pay({
       }, 20);
       return () => clearTimeout(t);
     }
+  }, [couponMode]);
+
+  useEffect(() => {
+    if (couponMode !== "editing") return;
+
+    const onDown = (e: MouseEvent) => {
+      // ✅ se o usuário NÃO chegou a clicar/teclar no input do cupom
+      if (couponInteractedRef.current) return;
+
+      const t = e.target as Node;
+      if (couponBoxRef.current?.contains(t)) return;
+
+      // ✅ clicou fora sem interagir com o input => volta pro botão Add code
+      setCouponError(null);
+      setCouponValidating(false);
+      setCouponMode("closed");
+    };
+
+    document.addEventListener("mousedown", onDown, true);
+    return () => document.removeEventListener("mousedown", onDown, true);
   }, [couponMode]);
 
   // Ajusta defaults quando muda país (evita inconsistências visuais / select inválido)
@@ -2234,14 +2283,19 @@ export default function Pay({
 
       const res = await fetch("/api/pagment", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        credentials: "include",
+        cache: "no-store",
         body: JSON.stringify({
           method: "pix",
           plan: safePlan,
           billing: safeBilling,
           planTitle,
           planDescription,
-          payer: { cpf: pixCpf, name: pixName },
+          payer: { cpf: onlyDigits(pixCpf), name: pixName },
 
           //  aqui: se code for null/vazio, manda null (remove cupom)
           coupon: code && code.trim() ? code.trim() : null,
@@ -2253,7 +2307,14 @@ export default function Pay({
         }),
       });
 
-      const j = await res.json();
+      const j = await res.json().catch(() => null);
+
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(
+          "Sessão expirada ou sem permissão (403). Faça login novamente e tente gerar o Pix.",
+        );
+      }
+
       if (!res.ok || !j?.ok)
         throw new Error(j?.message || "Falha ao regerar Pix.");
 
@@ -2320,6 +2381,11 @@ export default function Pay({
     setCouponError(null);
     setCouponValidating(false);
     setCouponMode("editing");
+
+    // ✅ ao entrar em edição (veio de "applied"), já remove cupom no Pix e regera o QR
+    setTimeout(() => {
+      refreshPixWithCoupon(null);
+    }, 0);
   }
 
   function cancelCouponEdit() {
@@ -2577,7 +2643,12 @@ export default function Pay({
   async function createPayment(methodToCreate: "pix" | "boleto") {
     const res = await fetch("/api/pagment", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      credentials: "include",
+      cache: "no-store",
       body: JSON.stringify({
         method: methodToCreate,
         plan: safePlan,
@@ -2586,10 +2657,10 @@ export default function Pay({
         planDescription,
         payer:
           methodToCreate === "pix"
-            ? { cpf: pixCpf, name: pixName }
+            ? { cpf: onlyDigits(pixCpf), name: pixName }
             : {
                 email: boletoEmail,
-                cpf: boletoCpf,
+                cpf: onlyDigits(boletoCpf),
                 name: boletoName,
                 address: {
                   zip_code: onlyDigits(boletoZip),
@@ -2606,7 +2677,13 @@ export default function Pay({
       }),
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => null);
+
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        "Sessão expirada ou sem permissão (403). Faça login novamente e tente gerar o pagamento.",
+      );
+    }
 
     if (!res.ok || !data?.ok) {
       throw new Error(
@@ -2643,7 +2720,6 @@ export default function Pay({
       };
     };
   }
-
   // Progress (inteligência visual)
   const cardValidity = useMemo(() => {
     const eOk = !validateEmailField(email);
@@ -2868,10 +2944,28 @@ export default function Pay({
             `/api/pagment?id=${encodeURIComponent(pixPaymentId)}`,
             {
               method: "GET",
-              headers: { "Content-Type": "application/json" },
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              credentials: "include",
+              cache: "no-store",
             },
           );
-          const j = await r.json();
+
+          if (r.status === 401 || r.status === 403) {
+            setActionState("error");
+            setLiveStatusDetail(
+              "Sessão expirada ou sem permissão (403). Faça login novamente e gere o Pix de novo.",
+            );
+            actionTimerRef.current = window.setTimeout(
+              () => setActionState("idle"),
+              1200,
+            );
+            return;
+          }
+
+          const j = await r.json().catch(() => null);
 
           if (j?.ok) {
             const status = String(j.status || "");
@@ -3119,6 +3213,7 @@ export default function Pay({
                                   <AnimatePresence mode="wait">
                                     {couponMode === "editing" ? (
                                       <motion.div
+                                        ref={couponBoxRef}
                                         key="coupon-edit"
                                         initial={{ opacity: 0, x: 10 }}
                                         animate={{ opacity: 1, x: 0 }}
@@ -3128,15 +3223,19 @@ export default function Pay({
                                           ease: "easeOut",
                                         }}
                                         className={`relative h-[42px] w-full rounded-xl border bg-white/[0.03]
-                                                 shadow-[0_18px_55px_rgba(0,0,0,0.45)]
-                                                 ${couponError ? "border-red-500/60" : "border-white/10"}`}
+                                          shadow-[0_18px_55px_rgba(0,0,0,0.45)]
+                                          ${couponError ? "border-red-500/60" : "border-white/10"}`}
                                       >
                                         <input
                                           ref={couponRef}
                                           value={coupon}
-                                          onChange={(e) =>
-                                            setCoupon(e.target.value)
-                                          }
+                                          onPointerDown={() => {
+                                            couponInteractedRef.current = true; // ✅ clicou no input
+                                          }}
+                                          onChange={(e) => {
+                                            couponInteractedRef.current = true; // ✅ começou a digitar
+                                            setCoupon(e.target.value);
+                                          }}
                                           onBlur={(e) => {
                                             const v = e.currentTarget.value;
                                             if (!v.trim()) {
@@ -3145,6 +3244,8 @@ export default function Pay({
                                             }
                                           }}
                                           onKeyDown={(e) => {
+                                            couponInteractedRef.current = true; // ✅ teclado também conta como interação
+
                                             if (e.key === "Enter") {
                                               e.preventDefault();
                                               validateCoupon();
@@ -3158,28 +3259,26 @@ export default function Pay({
                                           className="h-full w-full bg-transparent pl-3 pr-[68px] text-[12px] text-white/85 outline-none placeholder:text-white/35"
                                         />
 
-                                        <div className="absolute -right-0.5 top-1/2 -translate-y-1/2">
-                                          <div className="absolute right-1 top-1/2 -translate-y-1/2">
-                                            {couponValidating ? (
-                                              <div
-                                                className="h-[36px] w-[44px] rounded-lg border border-white/10 bg-white/[0.03]
-                  inline-flex items-center justify-center"
-                                              >
-                                                <SpinnerMini />
-                                              </div>
-                                            ) : (
-                                              <button
-                                                type="button"
-                                                onClick={() => validateCoupon()} // ✅ chama a função (resolve o "vermelho")
-                                                className="h-[36px] px-4 rounded-[10px] border border-white/10 bg-white/[0.03]
-              text-[12px] font-semibold text-white/85
-              hover:bg-white/[0.06] transition"
-                                                aria-label="Validar cupom"
-                                              >
-                                                OK
-                                              </button>
-                                            )}
-                                          </div>
+                                        <div className="absolute right-1 top-1/2 -translate-y-1/2">
+                                          {couponValidating ? (
+                                            <div
+                                              className="h-[36px] w-[44px] rounded-lg border border-white/10 bg-white/[0.03]
+                                                          inline-flex items-center justify-center"
+                                            >
+                                              <SpinnerMini />
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => validateCoupon()} // ✅ chama a função (resolve o "vermelho")
+                                              className="h-[36px] px-4 rounded-[10px] border border-white/10 bg-white/[0.03]
+                                                  text-[12px] font-semibold text-white/85
+                                                  hover:bg-white/[0.06] transition"
+                                              aria-label="Validar cupom"
+                                            >
+                                              OK
+                                            </button>
+                                          )}
                                         </div>
                                       </motion.div>
                                     ) : couponMode === "applied" ? (
@@ -3197,8 +3296,8 @@ export default function Pay({
                                           ease: "easeOut",
                                         }}
                                         className="h-[42px] w-full rounded-xl border border-[#214FC4]/40 bg-[#214FC4]/15
-                                                 px-4 text-[12px] font-semibold text-white/85
-                                                 hover:bg-[#214FC4]/20 transition inline-flex items-center justify-between gap-3"
+                                              px-4 text-[12px] font-semibold text-white/85
+                                              hover:bg-[#214FC4]/20 transition inline-flex items-center justify-between gap-3"
                                       >
                                         <span className="truncate">
                                           Código promocional aplicado
@@ -3214,6 +3313,7 @@ export default function Pay({
                                         onClick={() => {
                                           setCouponError(null);
                                           setCouponValidating(false);
+                                          couponInteractedRef.current = false; // ✅ importante
                                           setCouponMode("editing");
                                         }}
                                         initial={{ opacity: 0, x: 10 }}
@@ -3224,8 +3324,8 @@ export default function Pay({
                                           ease: "easeOut",
                                         }}
                                         className="h-[42px] w-full rounded-xl border border-white/10 bg-white/[0.03] px-4
-                                                 text-[12px] font-semibold text-white/70
-                                                 hover:bg-white/[0.06] hover:text-white transition inline-flex items-center justify-center"
+                                                        text-[12px] font-semibold text-white/70
+                                                        hover:bg-white/[0.06] hover:text-white transition inline-flex items-center justify-center"
                                       >
                                         Add code
                                       </motion.button>
@@ -3291,44 +3391,6 @@ export default function Pay({
                             </div>
                           </div>
                         </motion.div>
-
-                        <div className="mt-10 pb-10">
-                          <div className="text-[12px] text-white/45">
-                            Recomendado para você
-                          </div>
-
-                          <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 p-4 shadow-[0_22px_60px_rgba(0,0,0,0.55)]">
-                            <div className="flex items-center gap-4">
-                              <div className="relative h-[56px] w-[56px] overflow-hidden rounded-xl border border-white/10 bg-gradient-to-b from-white/[0.10] to-white/[0.03]">
-                                <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.18),transparent_55%)]" />
-                                <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_80%,rgba(33,79,196,0.22),transparent_55%)]" />
-                              </div>
-
-                              <div className="min-w-0 flex-1">
-                                <div className="truncate text-[13px] font-semibold text-white">
-                                  Sony PlayStation VR2
-                                </div>
-                                <div className="mt-0.5 text-[12px] text-white/45">
-                                  Dive into a world of unrivaled gaming
-                                  experiences.
-                                </div>
-                              </div>
-
-                              <div className="text-right">
-                                <div className="text-[12px] text-white/35 line-through">
-                                  {formatBRL(599.99)}
-                                </div>
-                                <div className="text-[14px] font-semibold text-red-400">
-                                  {formatBRL(320.99)}
-                                </div>
-                              </div>
-
-                              <button className="ml-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1 text-white/70 hover:bg-white/[0.06] hover:text-white transition">
-                                +
-                              </button>
-                            </div>
-                          </div>
-                        </div>
                       </div>
                     </div>
 
@@ -3368,8 +3430,7 @@ export default function Pay({
 
                             <div className="flex items-center gap-2 text-[12px] text-white/40">
                               <IconLock className="text-white/35" />
-                              <span>Transação segura</span>
-                              <span className="text-white/25">▾</span>
+                              <span>Dados Criptografados</span>
                             </div>
                           </div>
                         </div>
@@ -3428,7 +3489,7 @@ export default function Pay({
                                   key: "boleto",
                                   label: "Boleto",
                                   icon: (
-                                    <IconBoleto className="text-white/80" />
+                                    <BoletoImg className="h-[13px] w-[18px] opacity-90" />
                                   ),
                                 },
                               ] as const
@@ -3443,11 +3504,11 @@ export default function Pay({
                                     clearActionTimer();
                                   }}
                                   className={`relative flex items-center justify-center gap-2 rounded-xl px-3 sm:px-4 py-2 text-[13px] font-semibold transition
-                                  ${
-                                    active
-                                      ? "bg-white/[0.06] text-white border border-[#214FC4]/60 shadow-[0_0_0_2px_rgba(33,79,196,0.18)]"
-                                      : "text-white/55 hover:text-white hover:bg-white/[0.04] border border-white/10"
-                                  }`}
+                                    ${
+                                      active
+                                        ? "bg-white/[0.06] text-white border border-[#214FC4]/60 shadow-[0_0_0_2px_rgba(33,79,196,0.18)]"
+                                        : "text-white/55 hover:text-white hover:bg-white/[0.04] border border-white/10"
+                                    }`}
                                 >
                                   {m.icon}
                                   {m.label}
@@ -3893,7 +3954,7 @@ export default function Pay({
                                               Email:
                                             </span>{" "}
                                             <span className="text-white/30 border-white/10 bg-white/[0.03] p-1 rounded-md">
-                                              {discordEmail || "?"}
+                                              {discordEmail || "—"}
                                             </span>
                                           </div>
 
@@ -4577,7 +4638,7 @@ export default function Pay({
                         </motion.button>
 
                         <div className="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-[11px] text-white/35">
-                          <span>Powered by WyzeCode</span>
+                          <span>Powered by WyzeBank</span>
                           <span className="text-white/20">•</span>
                           <span className="hover:text-white/60 transition cursor-pointer">
                             Terms

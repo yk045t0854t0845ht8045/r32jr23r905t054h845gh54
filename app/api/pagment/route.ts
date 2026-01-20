@@ -35,6 +35,10 @@ type CouponDef = {
 };
 
 const APP_ORIGIN = (process.env.APP_ORIGIN || "").trim(); // ex: "https://seusite.com"
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 //  expirations (opcional)
 const MP_PIX_EXPIRATION_MINUTES = Number(
@@ -43,6 +47,13 @@ const MP_PIX_EXPIRATION_MINUTES = Number(
 const MP_BOLETO_EXPIRATION_DAYS = Number(
   process.env.MP_BOLETO_EXPIRATION_DAYS || "3",
 ); // 3 dias default
+
+// =========================
+// NEW: mínimo por método (evita PolicyAgent em valores muito baixos)
+// - Se você quiser permitir 0.01 em DEV, set MP_MIN_PIX_AMOUNT=0.01 no .env.local
+// =========================
+const MP_MIN_PIX_AMOUNT = Number(process.env.MP_MIN_PIX_AMOUNT || "1.00"); // default 1.00
+const MP_MIN_BOLETO_AMOUNT = Number(process.env.MP_MIN_BOLETO_AMOUNT || "1.00"); // default 1.00
 
 //  token para baixar comprovante (mais segurança)
 const RECEIPT_SECRET = (
@@ -312,12 +323,28 @@ function loadCoupons(): CouponDef[] {
   return defs;
 }
 
+// =========================
+// FIX: tipagem do retorno do evaluateCoupon (union discriminado)
+// Isso resolve o "finalCents vermelho" no POST, porque o TS estreita corretamente após "if (!couponEval.ok) return"
+// =========================
+type CouponEvalOk = {
+  ok: true;
+  applied: boolean;
+  code: string | null;
+  discountCents: number;
+  finalCents: number;
+  label: string | null;
+  type: CouponType | null;
+};
+type CouponEvalErr = { ok: false; message: string };
+type CouponEvalResult = CouponEvalOk | CouponEvalErr;
+
 function evaluateCoupon(args: {
   code: string;
   plan: Plan;
   billing: Billing;
   baseCents: number;
-}) {
+}): CouponEvalResult {
   const { code, plan, billing, baseCents } = args;
 
   if (!code) {
@@ -433,7 +460,8 @@ function normalizeRevision(v: any) {
 }
 
 function normalizePaymentId(v: any) {
-  const raw = typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "";
+  const raw =
+    typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "";
   if (!raw) return "";
   const d = raw.replace(/\D/g, "");
   return d.slice(0, 32);
@@ -453,7 +481,8 @@ function isValidCpfDigits(cpfDigits: string) {
 
   const calc = (base: string, factor: number) => {
     let total = 0;
-    for (let i = 0; i < base.length; i++) total += Number(base[i]) * (factor - i);
+    for (let i = 0; i < base.length; i++)
+      total += Number(base[i]) * (factor - i);
     const mod = total % 11;
     return mod < 2 ? 0 : 11 - mod;
   };
@@ -485,7 +514,10 @@ function maskEmail(email: string) {
   const e = (email || "").trim();
   if (!e || !e.includes("@")) return "";
   const [u, d] = e.split("@");
-  const uu = u.length <= 2 ? u[0] + "*" : u.slice(0, 2) + "*".repeat(Math.min(8, u.length - 2));
+  const uu =
+    u.length <= 2
+      ? u[0] + "*"
+      : u.slice(0, 2) + "*".repeat(Math.min(8, u.length - 2));
   return `${uu}@${d}`;
 }
 function maskCpf(cpf: string) {
@@ -498,7 +530,10 @@ function safeLogPayload(p: any) {
     const clone = JSON.parse(JSON.stringify(p || {}));
     if (clone?.payer?.email) clone.payer.email = maskEmail(String(clone.payer.email));
     if (clone?.payer?.cpf) clone.payer.cpf = maskCpf(String(clone.payer.cpf));
-    if (clone?.payer?.identification?.number) clone.payer.identification.number = maskCpf(String(clone.payer.identification.number));
+    if (clone?.payer?.identification?.number)
+      clone.payer.identification.number = maskCpf(
+        String(clone.payer.identification.number),
+      );
     return clone;
   } catch {
     return {};
@@ -518,8 +553,12 @@ async function mpFetch(
     idempotencyKey?: string;
   },
 ) {
-  const timeoutMs = Number.isFinite(opts.timeoutMs) ? (opts.timeoutMs as number) : MP_TIMEOUT_MS;
-  const retries = Number.isFinite(opts.retries) ? (opts.retries as number) : MP_FETCH_RETRIES;
+  const timeoutMs = Number.isFinite(opts.timeoutMs)
+    ? (opts.timeoutMs as number)
+    : MP_TIMEOUT_MS;
+  const retries = Number.isFinite(opts.retries)
+    ? (opts.retries as number)
+    : MP_FETCH_RETRIES;
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${opts.accessToken}`,
@@ -535,7 +574,10 @@ async function mpFetch(
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+    const t = setTimeout(
+      () => controller.abort(),
+      Math.max(1000, timeoutMs),
+    );
 
     try {
       const res = await fetch(url, {
@@ -551,18 +593,23 @@ async function mpFetch(
       const ct = (res.headers.get("content-type") || "").toLowerCase();
       const isJson = ct.includes("application/json");
 
-      const payload = isJson ? await res.json().catch(() => null) : await res.text().catch(() => null);
+      const payload = isJson
+        ? await res.json().catch(() => null)
+        : await res.text().catch(() => null);
 
       // sucesso
-      if (res.ok) return { ok: true as const, status: res.status, payload, headers: res.headers };
+      if (res.ok)
+        return { ok: true as const, status: res.status, payload, headers: res.headers };
 
       // retry em 429/5xx
-      const retriable = res.status === 429 || (res.status >= 500 && res.status <= 599);
+      const retriable =
+        res.status === 429 || (res.status >= 500 && res.status <= 599);
       if (retriable && attempt < retries) {
         const ra = Number(res.headers.get("retry-after") || "");
         const backoff = Number.isFinite(ra)
           ? Math.max(0.2, ra) * 1000
-          : (MP_FETCH_RETRY_BASE_MS * (1 + attempt) * (1 + attempt)) + Math.floor(Math.random() * 150);
+          : MP_FETCH_RETRY_BASE_MS * (1 + attempt) * (1 + attempt) +
+            Math.floor(Math.random() * 150);
         await sleep(backoff);
         continue;
       }
@@ -575,7 +622,9 @@ async function mpFetch(
       // retry em abort / network
       const isAbort = err?.name === "AbortError";
       if ((isAbort || err) && attempt < retries) {
-        const backoff = (MP_FETCH_RETRY_BASE_MS * (1 + attempt) * (1 + attempt)) + Math.floor(Math.random() * 150);
+        const backoff =
+          MP_FETCH_RETRY_BASE_MS * (1 + attempt) * (1 + attempt) +
+          Math.floor(Math.random() * 150);
         await sleep(backoff);
         continue;
       }
@@ -583,7 +632,12 @@ async function mpFetch(
     }
   }
 
-  return { ok: false as const, status: null as any, payload: lastErr || null, headers: null as any };
+  return {
+    ok: false as const,
+    status: null as any,
+    payload: lastErr || null,
+    headers: null as any,
+  };
 }
 
 function isCancellableStatus(status: string | null) {
@@ -593,12 +647,23 @@ function isCancellableStatus(status: string | null) {
   if (s === "approved") return false;
   if (s === "cancelled") return false;
   // pendentes típicos
-  return s === "pending" || s === "in_process" || s === "authorized" || s === "in_mediation";
+  return (
+    s === "pending" ||
+    s === "in_process" ||
+    s === "authorized" ||
+    s === "in_mediation"
+  );
 }
 
 function isFinalStatus(status: string | null) {
   const s = String(status || "").toLowerCase();
-  return s === "approved" || s === "rejected" || s === "cancelled" || s === "refunded" || s === "charged_back";
+  return (
+    s === "approved" ||
+    s === "rejected" ||
+    s === "cancelled" ||
+    s === "refunded" ||
+    s === "charged_back"
+  );
 }
 
 function computePricingFingerprint(args: {
@@ -643,17 +708,26 @@ function getIntent(key: string) {
   return it;
 }
 
-function setIntent(key: string, value: { payment_id: string; fingerprint: string; status?: string | null }) {
+function setIntent(
+  key: string,
+  value: { payment_id: string; fingerprint: string; status?: string | null },
+) {
   intentStore.set(key, { ...value, createdAt: Date.now() });
 }
 
 // busca pagamentos existentes pelo external_reference (dedupe real no MP)
-async function mpSearchByExternalReference(accessToken: string, external_reference: string) {
+async function mpSearchByExternalReference(
+  accessToken: string,
+  external_reference: string,
+) {
   const url = new URL(`${MP_API_BASE}/v1/payments/search`);
   url.searchParams.set("external_reference", external_reference);
   url.searchParams.set("sort", "date_created");
   url.searchParams.set("criteria", "desc");
-  url.searchParams.set("limit", String(Math.max(1, Math.min(50, MP_SEARCH_MAX_RESULTS))));
+  url.searchParams.set(
+    "limit",
+    String(Math.max(1, Math.min(50, MP_SEARCH_MAX_RESULTS))),
+  );
 
   const res = await mpFetch(url.toString(), {
     method: "GET",
@@ -662,7 +736,8 @@ async function mpSearchByExternalReference(accessToken: string, external_referen
     retries: MP_FETCH_RETRIES,
   });
 
-  if (!res.ok) return { ok: false as const, status: res.status, data: null as any };
+  if (!res.ok)
+    return { ok: false as const, status: res.status, data: null as any };
 
   // formato típico: { results: [...], paging: {...} }
   const data = res.payload;
@@ -674,12 +749,15 @@ async function mpGetPaymentById(accessToken: string, paymentId: string) {
   const id = normalizePaymentId(paymentId);
   if (!id) return { ok: false as const, status: 400, data: null as any };
 
-  const res = await mpFetch(`${MP_API_BASE}/v1/payments/${encodeURIComponent(id)}`, {
-    method: "GET",
-    accessToken,
-    timeoutMs: MP_TIMEOUT_MS,
-    retries: MP_FETCH_RETRIES,
-  });
+  const res = await mpFetch(
+    `${MP_API_BASE}/v1/payments/${encodeURIComponent(id)}`,
+    {
+      method: "GET",
+      accessToken,
+      timeoutMs: MP_TIMEOUT_MS,
+      retries: MP_FETCH_RETRIES,
+    },
+  );
 
   if (!res.ok) return { ok: false as const, status: res.status, data: res.payload };
   return { ok: true as const, status: res.status, data: res.payload };
@@ -693,8 +771,10 @@ function attachTraceHeaders(resp: NextResponse, traceId?: string, rl?: any) {
 
   // rate headers (úteis p/ debug)
   if (rl?.ip) resp.headers.set("X-RateLimit-Id", String(rl.ip));
-  if (typeof rl?.remaining === "number") resp.headers.set("X-RateLimit-Remaining", String(rl.remaining));
-  if (typeof rl?.resetAt === "number") resp.headers.set("X-RateLimit-Reset", String(Math.floor(rl.resetAt / 1000)));
+  if (typeof rl?.remaining === "number")
+    resp.headers.set("X-RateLimit-Remaining", String(rl.remaining));
+  if (typeof rl?.resetAt === "number")
+    resp.headers.set("X-RateLimit-Reset", String(Math.floor(rl.resetAt / 1000)));
 
   return resp;
 }
@@ -782,9 +862,29 @@ function extractMpError(err: any) {
 }
 
 /**
+ * NEW: mínimo por método (em centavos)
+ */
+function getMinFinalCentsForMethod(method: Method) {
+  let min = 0;
+  if (method === "pix")
+    min = Number.isFinite(MP_MIN_PIX_AMOUNT) ? MP_MIN_PIX_AMOUNT : 1;
+  else if (method === "boleto")
+    min = Number.isFinite(MP_MIN_BOLETO_AMOUNT) ? MP_MIN_BOLETO_AMOUNT : 1;
+  else min = 1;
+
+  // nunca abaixo de 0.01 (1 centavo)
+  const cents = toCents(Math.max(0.01, min));
+  return Math.max(1, cents);
+}
+
+/**
  *  CANCELA payment anterior somente quando solicitado
  */
-async function tryCancelPayment(paymentId: string, accessToken: string, traceId?: string) {
+async function tryCancelPayment(
+  paymentId: string,
+  accessToken: string,
+  traceId?: string,
+) {
   const pid = normalizePaymentId(paymentId);
   if (!pid) return { ok: false, status: 400, reason: "paymentId inválido" };
 
@@ -794,7 +894,12 @@ async function tryCancelPayment(paymentId: string, accessToken: string, traceId?
     const curStatus = current.ok ? String(current.data?.status ?? "") : null;
 
     if (curStatus && !isCancellableStatus(curStatus)) {
-      return { ok: true, status: 200, skipped: true, reason: `não cancelado: status=${curStatus}` };
+      return {
+        ok: true,
+        status: 200,
+        skipped: true,
+        reason: `não cancelado: status=${curStatus}`,
+      };
     }
   } catch {
     // best effort
@@ -804,17 +909,24 @@ async function tryCancelPayment(paymentId: string, accessToken: string, traceId?
   const idKey = stableIdempotencyKey(`cancel|${pid}|${traceId || ""}`);
 
   try {
-    const res = await mpFetch(`${MP_API_BASE}/v1/payments/${encodeURIComponent(pid)}`, {
-      method: "PUT",
-      accessToken,
-      timeoutMs: MP_TIMEOUT_MS,
-      retries: MP_FETCH_RETRIES,
-      idempotencyKey: idKey,
-      body: { status: "cancelled" },
-    });
+    const res = await mpFetch(
+      `${MP_API_BASE}/v1/payments/${encodeURIComponent(pid)}`,
+      {
+        method: "PUT",
+        accessToken,
+        timeoutMs: MP_TIMEOUT_MS,
+        retries: MP_FETCH_RETRIES,
+        idempotencyKey: idKey,
+        body: { status: "cancelled" },
+      },
+    );
 
     if (!res.ok) {
-      return { ok: false, status: res.status ?? null, mp_payload: res.payload ?? null };
+      return {
+        ok: false,
+        status: res.status ?? null,
+        mp_payload: res.payload ?? null,
+      };
     }
 
     return { ok: true, status: res.status ?? 200 };
@@ -823,26 +935,67 @@ async function tryCancelPayment(paymentId: string, accessToken: string, traceId?
   }
 }
 
+/**
+ * =========================
+ * ORIGIN/CORS HARDENING (corrige seu 403 na origem)
+ * =========================
+ */
+
+function normalizeOrigin(input: string) {
+  try {
+    return new URL(input).origin;
+  } catch {
+    return null;
+  }
+}
+
+function getRequestOrigin(req: NextRequest) {
+  const protoRaw = (req.headers.get("x-forwarded-proto") || "").trim();
+  const hostRaw =
+    (req.headers.get("x-forwarded-host") || req.headers.get("host") || "").trim();
+
+  const proto = (protoRaw.split(",")[0] || "").trim() || "https";
+  const host = (hostRaw.split(",")[0] || "").trim();
+
+  if (!host) return null;
+  if (proto !== "http" && proto !== "https") return `https://${host}`;
+  return `${proto}://${host}`;
+}
+
+function isAllowedOrigin(req: NextRequest, candidate: string) {
+  const cand = normalizeOrigin(candidate);
+  if (!cand) return false;
+
+  const reqOrigin = getRequestOrigin(req);
+  const allow = new Set<string>(
+    [APP_ORIGIN, reqOrigin, ...ALLOWED_ORIGINS].filter(Boolean) as string[],
+  );
+
+  // permitido se estiver no allowlist
+  if (allow.has(cand)) return true;
+
+  // permitido se bater com a origem real do request (resolve APP_ORIGIN errado)
+  if (reqOrigin && cand === reqOrigin) return true;
+
+  return false;
+}
+
 function enforceOrigin(req: NextRequest) {
+  // Em dev, não bloqueia
   if (process.env.NODE_ENV !== "production") return true;
-  if (!APP_ORIGIN) return true;
 
   const origin = (req.headers.get("origin") || "").trim();
   const referer = (req.headers.get("referer") || "").trim();
 
-  const sameOrigin = (a: string, b: string) => {
-    try {
-      return new URL(a).origin === new URL(b).origin;
-    } catch {
-      return false;
-    }
-  };
+  // Se não veio Origin/Referer (server-to-server), não bloqueia
+  if (!origin && !referer) return true;
 
-  if (origin && sameOrigin(origin, APP_ORIGIN)) return true;
-  if (referer && sameOrigin(referer, APP_ORIGIN)) return true;
+  if (origin && isAllowedOrigin(req, origin)) return true;
+  if (referer && isAllowedOrigin(req, referer)) return true;
 
   return false;
 }
+
 function enforceJson(req: NextRequest) {
   const ct = (req.headers.get("content-type") || "").toLowerCase();
   return ct.includes("application/json");
@@ -1055,7 +1208,8 @@ async function generateReceiptPdf(mpRes: any): Promise<Uint8Array> {
   row("Data", formatDateBR(created) || "-");
   row("ID do pagamento", id || "-");
   if (externalRef) row("Referência", externalRef);
-  if (plan || billing) row("Plano", `${plan || "-"}${billing ? ` • ${billing}` : ""}`);
+  if (plan || billing)
+    row("Plano", `${plan || "-"}${billing ? ` • ${billing}` : ""}`);
   if (coupon) row("Cupom", coupon);
 
   // QR (se tiver)
@@ -1208,6 +1362,18 @@ async function tryStreamMpPdfOrRedirect(candidates: string[], filename: string) 
 }
 
 /**
+ * OPTIONS /api/pagment
+ * (preflight / compat)
+ */
+export async function OPTIONS() {
+  const resp = new NextResponse(null, { status: 204 });
+  resp.headers.set("Cache-Control", "no-store");
+  resp.headers.set("X-Content-Type-Options", "nosniff");
+  resp.headers.set("Referrer-Policy", "same-origin");
+  return resp;
+}
+
+/**
  * GET /api/pagment?id=123
  * ou
  * GET /api/pagment?receipt=1&id=123&token=...
@@ -1333,7 +1499,11 @@ export async function GET(req: NextRequest) {
     console.error("[GET /api/pagment] error:", { message: err?.message, mp });
 
     const resp = NextResponse.json(
-      { ok: false, message: err?.message || "Erro ao consultar pagamento.", mp_error: mp },
+      {
+        ok: false,
+        message: err?.message || "Erro ao consultar pagamento.",
+        mp_error: mp,
+      },
       { status: 500, headers: SECURE_JSON_HEADERS },
     );
 
@@ -1366,7 +1536,16 @@ export async function POST(req: NextRequest) {
       return attachTraceHeaders(r, traceId, rl);
     }
     if (!enforceOrigin(req)) {
-      const r = bad("Origem não permitida.", 403, { traceId });
+      const r = bad("Origem não permitida.", 403, {
+        traceId,
+        debug: {
+          origin: (req.headers.get("origin") || "").trim() || null,
+          referer: (req.headers.get("referer") || "").trim() || null,
+          app_origin: APP_ORIGIN || null,
+          allowed_origins: ALLOWED_ORIGINS,
+          request_origin: getRequestOrigin(req),
+        },
+      });
       return attachTraceHeaders(r, traceId, rl);
     }
     if (!enforceJson(req)) {
@@ -1445,13 +1624,22 @@ export async function POST(req: NextRequest) {
       return attachTraceHeaders(r, traceId, rl);
     }
 
-    const finalCents = couponEval.finalCents;
-    const discountCents = couponEval.discountCents;
+    // =========================
+    // NEW: ajusta mínimo por método (evita bloqueio 403 PolicyAgent em total muito baixo)
+    // =========================
+    let finalCents = couponEval.finalCents;
+    let discountCents = couponEval.discountCents;
+
+    const minFinalCents = getMinFinalCentsForMethod(method);
+    if (finalCents < minFinalCents) {
+      finalCents = minFinalCents;
+      discountCents = Math.max(0, baseCents - finalCents);
+    }
 
     const pricing = {
       base: centsToNumber(baseCents), // total cheio (anual = 12 meses)
       discount: centsToNumber(discountCents),
-      total: centsToNumber(finalCents), // total final (anual = 12 meses)
+      total: centsToNumber(finalCents), // total final (anual = 12 meses) (já com mínimo aplicado)
       coupon: couponEval.applied ? couponCode : null,
       label: couponEval.applied ? couponEval.label : null,
       type: couponEval.applied ? couponEval.type : null,
@@ -1494,13 +1682,24 @@ export async function POST(req: NextRequest) {
 
     const accessToken = (process.env.MP_ACCESS_TOKEN || "").trim();
     const isTestToken = accessToken.startsWith("TEST-");
+    const looksProdToken = accessToken.startsWith("APP_USR-");
 
     if (!accessToken) {
       const r = bad("MP_ACCESS_TOKEN não configurado no .env.local", 500, { traceId });
       return attachTraceHeaders(r, traceId, rl);
     }
 
-    // Validações fortes por método (reduz “erro de aprovação” por dados ruins)
+    // NEW: aviso rápido se token tem cara de “estranho”
+    if (!isTestToken && !looksProdToken) {
+      // não bloqueia, só ajuda no diagnóstico
+      console.warn(
+        "[MP token] traceId:",
+        traceId,
+        "token não parece TEST- nem APP_USR- (verifique se está correto).",
+      );
+    }
+
+    // Validações fortes por método
     if (method === "pix") {
       if (!payerEmail) {
         const r = bad("Email do pagador é obrigatório.", 400, { traceId });
@@ -1518,7 +1717,6 @@ export async function POST(req: NextRequest) {
         const r = bad("CPF do pagador inválido.", 400, { traceId });
         return attachTraceHeaders(r, traceId, rl);
       }
-      // Pix: nome ajuda a evitar rejeições em alguns fluxos/contas
       if (!payerName || payerName.length < 3) {
         const r = bad("Nome do pagador é obrigatório.", 400, { traceId });
         return attachTraceHeaders(r, traceId, rl);
@@ -1556,7 +1754,6 @@ export async function POST(req: NextRequest) {
         return attachTraceHeaders(r, traceId, rl);
       }
 
-      //  boleto costuma exigir nome e sobrenome (evita erro do MP)
       const np = splitName(payerName);
       if (!np.last_name) {
         const r = bad("Para boleto, informe nome e sobrenome.", 400, { traceId });
@@ -1574,7 +1771,6 @@ export async function POST(req: NextRequest) {
     }
 
     if (method === "pix" || method === "boleto") {
-      // order/revision determinísticos (front pode mandar; se não mandar, geramos)
       const incomingOrder = normalizeOrderId(body?.order_id);
       const order_id = incomingOrder || crypto.randomUUID();
 
@@ -1584,8 +1780,6 @@ export async function POST(req: NextRequest) {
 
       const external_reference = `order:${order_id}:rev:${revision}`;
 
-      // idempotency estável do CREATE (evita duplicação em retry/refresh)
-      // OBS: inclui fingerprint + external_reference para garantir consistência entre tentativas iguais
       const createIdempotencyKey = stableIdempotencyKey(
         `create|${external_reference}|${method}|${pricingFingerprint}|${payerCpf}|${payerEmail}`,
       );
@@ -1600,7 +1794,6 @@ export async function POST(req: NextRequest) {
 
       const payment_method_id = method === "pix" ? "pix" : "bolbradesco";
 
-      //  PRIMEIRO: valida e monta endereço do boleto (se boleto)
       let boletoAddress: MpBoletoAddress | null = null;
 
       if (method === "boleto") {
@@ -1616,7 +1809,6 @@ export async function POST(req: NextRequest) {
         boletoAddress = addr.address;
       }
 
-      //  DEPOIS: monta payer
       const payer: any = {
         email: payerEmail,
         identification: { type: "CPF", number: payerCpf },
@@ -1628,21 +1820,17 @@ export async function POST(req: NextRequest) {
         payer.last_name = last_name || undefined;
       }
 
-      //  obrigatório para boleto registrado (AGORA boletoAddress já existe aqui)
       if (method === "boleto" && boletoAddress) {
         payer.address = boletoAddress;
       }
 
-      //  DEDUPE: 1) local curto (evita duplicar em spam no mesmo pod)
       const intentKey = makeIntentKey(order_id, revision, method);
       const existingIntent = getIntent(intentKey);
       if (existingIntent && existingIntent.fingerprint === pricingFingerprint) {
-        // tenta validar se ainda existe no MP (best-effort)
         try {
           const check = await mpGetPaymentById(accessToken, existingIntent.payment_id);
           if (check.ok) {
             const st = String(check.data?.status ?? "");
-            // se ainda não é final, retorna o mesmo (evita QR trocar sem necessidade)
             if (!isFinalStatus(st)) {
               const tx0 = check.data?.point_of_interaction?.transaction_data || {};
               const qr_code0 = tx0?.qr_code || null;
@@ -1706,22 +1894,20 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      //  DEDUPE: 2) real no MP por external_reference (evita duplicação em múltiplos pods/refresh)
       try {
         const search = await mpSearchByExternalReference(accessToken, external_reference);
         if (search.ok) {
           const results = Array.isArray(search.data?.results) ? search.data.results : [];
 
-          // pega o mais recente que não seja cancelled e que bata fingerprint (quando disponível)
           const candidate = results.find((p: any) => {
             const st = String(p?.status ?? "");
             if (String(st).toLowerCase() === "cancelled") return false;
 
-            // compara fingerprint salvo no metadata (se existir)
-            const fp = p?.metadata?.pricing_fingerprint ? String(p.metadata.pricing_fingerprint) : "";
+            const fp = p?.metadata?.pricing_fingerprint
+              ? String(p.metadata.pricing_fingerprint)
+              : "";
             if (fp && fp !== pricingFingerprint) return false;
 
-            // compara method_id (se vier)
             const pmid = String(p?.payment_method_id ?? "");
             if (method === "pix" && pmid && pmid !== "pix") return false;
             if (method === "boleto" && pmid && pmid !== "bolbradesco") return false;
@@ -1731,7 +1917,6 @@ export async function POST(req: NextRequest) {
 
           if (candidate?.id) {
             const st = String(candidate?.status ?? "");
-            // se não final, reutiliza (mais estável)
             if (!isFinalStatus(st)) {
               const tx0 = candidate?.point_of_interaction?.transaction_data || {};
               const qr_code0 = tx0?.qr_code || null;
@@ -1799,7 +1984,6 @@ export async function POST(req: NextRequest) {
         // segue fluxo normal
       }
 
-      //  SOMENTE cancela quando cancel_previous=true (ex: F5/reload)
       let cancelInfo: any = null;
       if (cancel_previous && replace_payment_id) {
         try {
@@ -1844,7 +2028,7 @@ export async function POST(req: NextRequest) {
               }
             }
           } catch {
-            // se não conseguir ler, segue best-effort
+            // best-effort
           }
 
           if (canCancel) {
@@ -1868,7 +2052,6 @@ export async function POST(req: NextRequest) {
       let mpRes: any;
 
       try {
-        // payload mais completo -> menos “status_detail” estranhos / melhora conciliação
         const additional_info: any = {
           items: [
             {
@@ -1889,51 +2072,45 @@ export async function POST(req: NextRequest) {
 
         mpRes = await payment.create({
           body: {
-            transaction_amount: Number(pricing.total), // anual já vai como total (12 meses)
-
+            transaction_amount: Number(pricing.total),
             description,
             payment_method_id,
             payer,
             external_reference,
-
             ...(expirationIso ? { date_of_expiration: expirationIso } : {}),
-
             metadata: {
               trace_id: traceId,
               plan,
               billing,
-
-              //  total cheio/final (anual=12 meses) + info do "por mês"
               unit_amount: pricing.unit,
               billing_months: pricing.months,
               base_amount: pricing.base,
               discount_amount: pricing.discount,
               final_amount: pricing.total,
-
               coupon: pricing.coupon,
               coupon_type: pricing.type,
-
-              // fingerprint (dedupe real)
               pricing_fingerprint: pricingFingerprint,
-
               order_id,
               revision,
               replaced_payment_id: replace_payment_id || null,
               cancel_previous: cancel_previous ? true : false,
             },
-
             notification_url: process.env.MP_WEBHOOK_URL || undefined,
-
-            // plus: ajuda no antifraude/qualidade do request
             additional_info,
           },
         });
       } catch (err: any) {
         const mp = extractMpError(err);
 
+        const msg = String(mp?.mpMessage || err?.message || "");
+        const mpStatusNum =
+          typeof mp?.mpStatus === "number" && Number.isFinite(mp.mpStatus)
+            ? mp.mpStatus
+            : null;
+
         const isNoPixKey =
           mp?.codes?.includes(13253) ||
-          /without key enabled/i.test(mp?.mpMessage || "") ||
+          /without key enabled/i.test(msg) ||
           /without key enabled/i.test(String((mp as any)?.mpData?.message || ""));
 
         if (isNoPixKey) {
@@ -1945,7 +2122,35 @@ export async function POST(req: NextRequest) {
           return attachTraceHeaders(r, traceId, rl);
         }
 
+        const isPolicyUnauthorized =
+          (mpStatusNum === 403 && /policy returned unauthorized/i.test(msg)) ||
+          /blocked_by/i.test(msg) ||
+          /PolicyAgent/i.test(msg);
+
+        if (isPolicyUnauthorized) {
+          const r = bad(
+            "Mercado Pago bloqueou a criação (PolicyAgent / UNAUTHORIZED). Isso geralmente acontece por política/permissão da conta ou por valor/risco. Verifique se o MP_ACCESS_TOKEN é de PRODUÇÃO e se a conta está habilitada para Pix/Boleto. Se você estiver usando cupom que derruba o total (ex: R$0,01), ajuste MP_MIN_PIX_AMOUNT/MP_MIN_BOLETO_AMOUNT (default R$1,00) no .env.local.",
+            403,
+            {
+              traceId,
+              mp_error: mp,
+              hint: {
+                method,
+                total: pricing.total,
+                minPix: MP_MIN_PIX_AMOUNT,
+                minBoleto: MP_MIN_BOLETO_AMOUNT,
+              },
+            },
+          );
+          return attachTraceHeaders(r, traceId, rl);
+        }
+
         console.error("[MP create] traceId:", traceId, "error:", { message: err?.message, mp });
+
+        const statusOut =
+          typeof mpStatusNum === "number" && mpStatusNum >= 400 && mpStatusNum <= 599
+            ? mpStatusNum
+            : 500;
 
         const resp = NextResponse.json(
           {
@@ -1954,13 +2159,12 @@ export async function POST(req: NextRequest) {
             traceId,
             mp_error: mp,
           },
-          { status: 500, headers: SECURE_JSON_HEADERS },
+          { status: statusOut, headers: SECURE_JSON_HEADERS },
         );
 
         return attachTraceHeaders(resp, traceId, rl);
       }
 
-      // guarda intent (dedupe local)
       const createdPaymentId = String(mpRes?.id ?? "");
       if (createdPaymentId) {
         setIntent(intentKey, {
@@ -1987,7 +2191,6 @@ export async function POST(req: NextRequest) {
         mpRes?.transaction_details?.barcode ||
         null;
 
-      //  comprovante pdf (token assinado)
       const paymentIdStr = String(mpRes?.id ?? "");
       const receipt_token = makeReceiptToken(paymentIdStr);
       const receipt_url = paymentIdStr ? buildReceiptUrl(paymentIdStr, receipt_token) : null;
@@ -2015,13 +2218,11 @@ export async function POST(req: NextRequest) {
           cancelInfo,
           date_of_expiration: mpRes?.date_of_expiration ?? expirationIso ?? null,
 
-          //  use isso no front no botão "Baixar Comprovante"
           receipt_url,
           receipt_token,
 
-          // debug safe (não sensível)
           fingerprint: pricingFingerprint,
-          idempotency_key_used: createIdempotencyKey, // ajuda a debugar duplicação
+          idempotency_key_used: createIdempotencyKey,
         },
         { status: 200, headers: SECURE_JSON_HEADERS },
       );

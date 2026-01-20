@@ -35,19 +35,17 @@ export default function DiscordProfile({
   }, []);
 
   return (
-   <motion.div
-  initial={{ opacity: 0, y: 12 }}
-  animate={{ opacity: 1, y: 0 }}
-  exit={{ opacity: 0, y: -12 }}
-  transition={{ duration: 0.35, ease: "easeOut" }}
-  className="mt-10 rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.06] to-white/[0.02] backdrop-blur-xl px-8 py-7 space-y-5 shadow-2xl"
->
-
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -12 }}
+      transition={{ duration: 0.35, ease: "easeOut" }}
+      className="mt-10 rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.06] to-white/[0.02] backdrop-blur-xl px-8 py-7 space-y-5 shadow-2xl"
+    >
       {/* ACCOUNT SELECT */}
       <div ref={selectRef} className="relative">
-        <button onClick={() => setOpenSelect(v => !v)} className="w-full">
+        <button onClick={() => setOpenSelect((v) => !v)} className="w-full">
           <div className="flex items-center gap-4 rounded-xl bg-[#151515] px-4 py-3 border border-white/10 hover:border-white/20 hover:bg-[#1b1b1b] transition-all">
-
             <div className="relative">
               <img
                 src={`https://cdn.discordapp.com/avatars/${active.id}/${active.avatar}.png`}
@@ -64,9 +62,7 @@ export default function DiscordProfile({
                   #{active.discriminator}
                 </span>
               </p>
-              <p className="text-xs text-white/50">
-                Conta ativa nesta sessão
-              </p>
+              <p className="text-xs text-white/50">Conta ativa nesta sessão</p>
             </div>
 
             <svg
@@ -96,12 +92,17 @@ export default function DiscordProfile({
                          backdrop-blur-xl shadow-[0_20px_50px_rgba(0,0,0,0.6)] p-3"
             >
               <div className="space-y-1">
-                {accounts.map(acc => {
+                {accounts.map((acc, idx) => {
                   const isActive = acc.id === active.id;
+
+                  // ✅ key realmente única (mesmo se algum id vier duplicado/bugado)
+                  const stableKey = `${String(acc?.id || "acc")}:${String(
+                    acc?.username || "user",
+                  )}:${idx}`;
 
                   return (
                     <button
-                      key={acc.id}
+                      key={stableKey}
                       onClick={() => {
                         setActive(acc);
                         setOpenSelect(false);
@@ -145,8 +146,10 @@ export default function DiscordProfile({
                            text-left transition-all border border-transparent
                            hover:bg-white/[0.06] hover:border-white/20"
               >
-                <div className="flex h-8 w-8 items-center justify-center rounded-full 
-                                bg-white/10 text-white/80">
+                <div
+                  className="flex h-8 w-8 items-center justify-center rounded-full 
+                                bg-white/10 text-white/80"
+                >
                   ⇄
                 </div>
                 <div className="flex flex-col">
@@ -165,18 +168,14 @@ export default function DiscordProfile({
 
       {/* SECURITY DETAILS */}
       <div className="rounded-xl border border-white/10 bg-[#141414] px-5 py-4 space-y-3">
-        <p className="text-sm font-medium text-white">
-          Permissões concedidas
-        </p>
+        <p className="text-sm font-medium text-white">Permissões concedidas</p>
 
         <ul className="space-y-2 text-sm text-white/70">
           <li>• Identificação básica cadastral</li>
           <li>• Endereço de e-mail associado à conta</li>
           <li>• Informações públicas do perfil Discord</li>
           <li>• Uso exclusivo para autenticação e sessão</li>
-          <li className="text-white/40">
-            • Nenhuma mensagem será enviada ou lida
-          </li>
+          <li className="text-white/40">• Nenhuma mensagem será enviada ou lida</li>
         </ul>
       </div>
 
@@ -188,17 +187,17 @@ export default function DiscordProfile({
 
       {/* CONFIRM BUTTON */}
       <button
-  className="w-full rounded-xl bg-gradient-to-b from-[#214FC4] to-[#214FC4]/90
+        className="w-full rounded-xl bg-gradient-to-b from-[#214FC4] to-[#214FC4]/90
              text-white py-3 text-sm font-medium shadow-lg
              hover:brightness-95 active:scale-[0.99] transition"
-  onClick={onConfirm}
->
-  Confirmar e continuar
-</button>
+        onClick={onConfirm}
+      >
+        Confirmar e continuar
+      </button>
 
       {/* LEGAL TEXT */}
       <p className="text-center text-[10px] text-white/40 leading-relaxed">
-        Ao confirmar, você concorda com todos os {" "}
+        Ao confirmar, você concorda com todos os{" "}
         <span className="text-white/60 hover:underline cursor-pointer">
           Termos de Serviço
         </span>{" "}

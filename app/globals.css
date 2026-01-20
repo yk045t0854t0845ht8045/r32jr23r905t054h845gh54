@@ -61,15 +61,16 @@ input:-webkit-autofill,
             /* ================================
    SCROLLBAR PREMIUM – .row-pay
 ================================ */
-
 .row-pay {
-  scrollbar-width: thin;                 /* Firefox */
-  scrollbar-color:     rgba(3, 3, 3, 0.85) transparent;
+  /* Firefox */
+  scrollbar-width: none;          /* não ocupa espaço */
+  scrollbar-color: transparent transparent;
 }
 
 /* WebKit (Chrome, Edge, Safari) */
 .row-pay::-webkit-scrollbar {
-  width: 8px;
+  width: 0px;
+  height: 0px;
 }
 
 .row-pay::-webkit-scrollbar-track {
@@ -77,34 +78,21 @@ input:-webkit-autofill,
 }
 
 .row-pay::-webkit-scrollbar-thumb {
-  background: linear-gradient(
-    180deg,
-    rgba(3, 3, 3, 0.85),
-    rgba(3, 3, 3, 0.85),
-  );
-  border-radius: 999px;
-  border: 2px solid transparent;
-  background-clip: content-box;
+  background: transparent;
 }
 
 .row-pay::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(
-    180deg,
-    rgba(3, 3, 3, 0.85),
-    rgba(3, 3, 3, 0.85),
-  );
+  background: transparent;
 }
 
-/* Estado ativo (drag) */
 .row-pay::-webkit-scrollbar-thumb:active {
-  background: rgba(43, 103, 255, 1);
+  background: transparent;
 }
 
 /* Remove botões laterais (setinhas) */
 .row-pay::-webkit-scrollbar-button {
   display: none;
 }
-
 
 /* =========================================================
    RESET / NORMALIZAÇÃO DE AUTOFILL (Chrome/Edge/Safari/Opera)

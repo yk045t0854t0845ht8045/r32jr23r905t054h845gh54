@@ -34,7 +34,7 @@ type Method = "card" | "pix" | "boleto";
 /* ------------------------------------------------------------------ */
 const PIX_ICON_URL = "/cdn/pay/pix.png";
 const VISA_LOGO_URL = "/cdn/pay/visa.svg";
-const MC_LOGO_URL = "/cdn/pay/mastercard.svg"; 
+const MC_LOGO_URL = "/cdn/pay/mastercard.svg";
 const ELO_LOGO_URL = "/cdn/pay/elo.svg";
 const AMEX_LOGO_URL = "/cdn/pay/amex.svg";
 
@@ -61,6 +61,53 @@ const PLAN_PRICES: Record<Billing, Record<Plan, number>> = {
 const TEST_COUPON_CODE = "DEVS";
 const TEST_COUPON_TARGET_TOTAL = 0.01;
 const TEST_COUPON_ENABLED = process.env.NODE_ENV !== "production";
+
+function BankOpenLoader({ reduceMotion }: { reduceMotion: boolean }) {
+  return (
+    <motion.div
+      initial={
+        reduceMotion ? { opacity: 0 } : { opacity: 0, y: 10, scale: 0.98 }
+      }
+      animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }}
+      exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 10, scale: 0.98 }}
+      transition={
+        reduceMotion ? { duration: 0.12 } : { duration: 0.25, ease: "easeOut" }
+      }
+      className="w-full max-w-[520px] rounded-3xl border border-white/10 bg-black/55 backdrop-blur-2xl
+                 shadow-[0_28px_90px_rgba(0,0,0,0.75)] p-6"
+    >
+      <div className="flex items-center gap-3">
+        <div className="h-11 w-11 rounded-2xl border border-white/10 bg-white/[0.04] flex items-center justify-center">
+          <IconLock className="text-white/75" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-[14px] font-semibold text-white truncate">
+            Preparando seu pagamento
+          </div>
+          <div className="text-[12px] text-white/45 truncate">
+            Aguarde só um instante…
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-6 flex items-center justify-center">
+        <motion.div
+          animate={reduceMotion ? undefined : { rotate: 360 }}
+          transition={
+            reduceMotion
+              ? undefined
+              : { repeat: Infinity, duration: 1.05, ease: "linear" }
+          }
+          className="h-16 w-16 rounded-full border-2 border-white/10 border-t-white/75"
+        />
+      </div>
+
+      <div className="mt-5 text-center text-[11px] text-white/35">
+        Conectando ao provedor e validando sessão…
+      </div>
+    </motion.div>
+  );
+}
 
 function safeText(v: unknown, fallback = ""): string {
   if (v == null) return fallback;
@@ -101,18 +148,6 @@ function centsToNumber(cents: number) {
   return Number((safe / 100).toFixed(2));
 }
 
-function getCookieValue(name: string) {
-  if (typeof document === "undefined") return null;
-  const m = document.cookie.match(
-    new RegExp(
-      "(^|;\\s*)" +
-        name.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&") +
-        "=([^;]*)",
-    ),
-  );
-  return m ? m[2] : null;
-}
-
 function formatCEP(raw: string) {
   const d = onlyDigits(raw).slice(0, 8);
   if (!d) return "";
@@ -149,6 +184,42 @@ const UF_CODES = [
   "SE",
   "TO",
 ];
+
+function getCookieValue(name: string): string {
+  try {
+    if (typeof document === "undefined") return "";
+    const parts = document.cookie.split(";").map((c) => c.trim());
+    const found = parts.find((c) => c.startsWith(`${name}=`));
+    if (!found) return "";
+    return found.slice(name.length + 1);
+  } catch {
+    return "";
+  }
+}
+
+async function readDiscordUserSafe(): Promise<any | null> {
+  // 1) tenta cookie (se NÃO for HttpOnly)
+  const fromCookie = readDiscordUserFromCookie();
+  if (fromCookie) return fromCookie;
+
+  // 2) fallback seguro: server lê cookie e devolve user
+  try {
+    const res = await fetch("/api/auth/discord/me", {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    const u = data?.user;
+    return u && typeof u === "object" ? u : null;
+  } catch {
+    return null;
+  }
+}
 
 function readDiscordUserFromCookie(): any | null {
   const raw = getCookieValue("discord_user");
@@ -1381,6 +1452,9 @@ export default function Pay({
   const [address, setAddress] = useState("");
   const [cpf, setCpf] = useState("");
 
+  const [uiGate, setUiGate] = useState<"idle" | "loading" | "ready">("idle");
+  const uiGateTimerRef = useRef<number | null>(null);
+
   const [zipLoading, setZipLoading] = useState(false);
   const [zipError, setZipError] = useState<string | null>(null);
   const [cityLocked, setCityLocked] = useState(false);
@@ -1459,6 +1533,31 @@ export default function Pay({
   }>({});
 
   const boletoEmailRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const du = await readDiscordUserSafe();
+      const mail = String(du?.email || "").trim();
+
+      if (cancelled) return;
+
+      setDiscordEmail(mail);
+
+      // ✅ deixa boleto acompanhar o Pix (mas sem sobrescrever se o user já digitou)
+      setBoletoEmail((prev: string) => (prev?.trim() ? prev : mail || ""));
+
+      // ✅ sentTo usa o que existir (sem depender de state stale)
+      setBoletoSentToEmail((prev: string) =>
+        prev?.trim() ? prev : mail || "",
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // CUPOM
   const [couponMode, setCouponMode] = useState<
@@ -1688,6 +1787,27 @@ export default function Pay({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) {
+      setUiGate("idle");
+      if (uiGateTimerRef.current) window.clearTimeout(uiGateTimerRef.current);
+      uiGateTimerRef.current = null;
+      return;
+    }
+
+    setUiGate("loading");
+    if (uiGateTimerRef.current) window.clearTimeout(uiGateTimerRef.current);
+
+    uiGateTimerRef.current = window.setTimeout(() => {
+      setUiGate("ready");
+    }, 2000);
+
+    return () => {
+      if (uiGateTimerRef.current) window.clearTimeout(uiGateTimerRef.current);
+      uiGateTimerRef.current = null;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (open) {
@@ -2214,8 +2334,9 @@ export default function Pay({
     setCouponMode("closed");
   }
 
-  function validateCoupon() {
-    const code = coupon.trim().toUpperCase();
+  function validateCoupon(rawValue?: string) {
+    const source = typeof rawValue === "string" ? rawValue : coupon;
+    const code = source.trim().toUpperCase();
 
     //  se apagou o cupom => remove e (se pix já gerado) regera com valor cheio
     if (!code) {
@@ -3016,6 +3137,13 @@ export default function Pay({
                                           onChange={(e) =>
                                             setCoupon(e.target.value)
                                           }
+                                          onBlur={(e) => {
+                                            const v = e.currentTarget.value;
+                                            if (!v.trim()) {
+                                              // ✅ apagou tudo e saiu do focus: volta para "Add code" + dispara regerar Pix
+                                              validateCoupon(v);
+                                            }
+                                          }}
                                           onKeyDown={(e) => {
                                             if (e.key === "Enter") {
                                               e.preventDefault();
@@ -3035,17 +3163,17 @@ export default function Pay({
                                             {couponValidating ? (
                                               <div
                                                 className="h-[36px] w-[44px] rounded-lg border border-white/10 bg-white/[0.03]
-                                                            inline-flex items-center justify-center"
+                  inline-flex items-center justify-center"
                                               >
                                                 <SpinnerMini />
                                               </div>
                                             ) : (
                                               <button
                                                 type="button"
-                                                onClick={validateCoupon}
+                                                onClick={() => validateCoupon()} // ✅ chama a função (resolve o "vermelho")
                                                 className="h-[36px] px-4 rounded-[10px] border border-white/10 bg-white/[0.03]
-                                                        text-[12px] font-semibold text-white/85
-                                                        hover:bg-white/[0.06] transition"
+              text-[12px] font-semibold text-white/85
+              hover:bg-white/[0.06] transition"
                                                 aria-label="Validar cupom"
                                               >
                                                 OK
@@ -3696,7 +3824,7 @@ export default function Pay({
                                 className="mt-6 w-full min-w-0"
                               >
                                 {/* Campos necessários pro Pix real */}
-                                {/* Campos necessários pro Pix real (agora: Nome + CPF; email vem do Discord cookie) */}
+                                {/* Campos necessários pro Pix real (agora: Nome + CPF; email vem do cookie) */}
                                 <div className="w-full rounded-2xl border border-white/10 bg-black/25 p-5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
                                   {/* SUCESSO: limpa tudo e mostra confirmado */}
                                   {pixStep === "success" ? (
@@ -3765,7 +3893,7 @@ export default function Pay({
                                               Email:
                                             </span>{" "}
                                             <span className="text-white/30 border-white/10 bg-white/[0.03] p-1 rounded-md">
-                                              {discordEmail || "—"}
+                                              {discordEmail || "?"}
                                             </span>
                                           </div>
 

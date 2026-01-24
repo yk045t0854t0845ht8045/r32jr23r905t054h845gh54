@@ -27,8 +27,6 @@ interface PayProps {
   planDescription: string;
 }
 
-type Method = "card" | "pix" | "boleto";
-
 /* ------------------------------------------------------------------ */
 /* CONFIG (VOCÊ TROCA OS LINKS) */
 /* ------------------------------------------------------------------ */
@@ -58,6 +56,26 @@ const PLAN_PRICES: Record<Billing, Record<Plan, number>> = {
 /* ------------------------------------------------------------------ */
 /* HELPERS */
 /* ------------------------------------------------------------------ */
+
+function normalizeLiveStatus(raw: any): LiveStatus {
+  const s = String(raw || "")
+    .toLowerCase()
+    .trim();
+
+  if (s === "approved" || s === "paid" || s === "succeeded") return "approved";
+
+  // ✅ padroniza canceled/cancelled
+  if (s === "canceled" || s === "cancelled" || s === "cancelado")
+    return "cancelled";
+
+  if (s === "expired" || s === "expirado") return "expired";
+
+  if (s === "rejected" || s === "refused" || s === "recusado" || s === "failed")
+    return "rejected";
+
+  // fallback (pending)
+  return "pending";
+}
 
 function BankOpenLoader({ reduceMotion }: { reduceMotion: boolean }) {
   return (
@@ -182,14 +200,6 @@ const UF_CODES = [
   "TO",
 ];
 
-
-
-
-
-
-
-
-
 function getCookieValue(name: string): string {
   try {
     if (typeof document === "undefined") return "";
@@ -238,17 +248,6 @@ function readDiscordUserFromCookie(): any | null {
     return null;
   }
 }
-
-
-
-
-
-
-
-
-
-
-
 
 function formatBRL(value: number) {
   return new Intl.NumberFormat("pt-BR", {
@@ -416,8 +415,6 @@ function safeClipboardWrite(text: string) {
   });
 }
 
-
-
 /* ---------------------------- ZIP / ADDRESS ---------------------------- */
 type CountryKey =
   | "Brasil"
@@ -543,6 +540,31 @@ function IconXCircleRed(props: { className?: string }) {
       <path
         d="M8 8l8 8M16 8l-8 8"
         stroke="#ef4444"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function IconXCircleYellow(props: { className?: string }) {
+  return (
+    <svg
+      className={props.className}
+      width="84"
+      height="84"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M22 12a10 10 0 1 1-20 0a10 10 0 0 1 20 0Z"
+        stroke="#efd544"
+        strokeWidth="2"
+      />
+      <path
+        d="M8 8l8 8M16 8l-8 8"
+        stroke="#efd544"
         strokeWidth="2"
         strokeLinecap="round"
       />
@@ -1156,6 +1178,18 @@ function DividerRow({ left, right }: { left: string; right: string }) {
 /* ------------------------------------------------------------------ */
 /* MAIN */
 /* ------------------------------------------------------------------ */
+
+type LiveStatus =
+  | "idle"
+  | "pending"
+  | "approved"
+  | "cancelled"
+  | "expired"
+  | "rejected";
+
+type Method = "card" | "pix" | "boleto";
+type PixStep = "form" | "qr" | "success";
+
 export default function Pay({
   open,
   onClose,
@@ -1484,7 +1518,8 @@ export default function Pay({
   const lastLookupKeyRef = useRef<string>("");
 
   // Discord (email vem do cookie)
-  const [discordEmail, setDiscordEmail] = useState<string>(""); 
+  const [discordEmail, setDiscordEmail] = useState<string>("");
+  const [discordId, setDiscordId] = useState<string>(""); // ✅ novo
 
   // PIX: dados que o usuário digita
   const [pixName, setPixName] = useState<string>("");
@@ -1537,6 +1572,11 @@ export default function Pay({
 
   const [boletoCepLoading, setBoletoCepLoading] = useState(false);
 
+  const [liveStatus, setLiveStatus] = useState<FinalStatus | null>(null);
+  const [liveStatusDetail, setLiveStatusDetail] = useState<string | null>(null);
+
+  const [pixStep, setPixStep] = useState<PixStep>("form"); // ou seu default real
+
   const [boletoErrors, setBoletoErrors] = useState<{
     email?: string | null;
     name?: string | null;
@@ -1557,6 +1597,10 @@ export default function Pay({
     (async () => {
       const du = await readDiscordUserSafe();
       const mail = String(du?.email || "").trim();
+      const did = String(du?.id || "").trim(); // ✅ novo
+
+      setDiscordEmail(mail);
+      setDiscordId(did); // ✅ novo
 
       if (cancelled) return;
 
@@ -1600,7 +1644,6 @@ export default function Pay({
 
   const [pixCopyPulse, setPixCopyPulse] = useState(0);
 
-  const [pixStep, setPixStep] = useState<"form" | "qr" | "success">("form");
   const [pixNameError, setPixNameError] = useState<string | null>(null);
 
   const pixNameRef = useRef<HTMLInputElement | null>(null);
@@ -1612,13 +1655,6 @@ export default function Pay({
   const [boletoTicketUrl, setBoletoTicketUrl] = useState<string | null>(null);
   const [boletoPaymentId, setBoletoPaymentId] = useState<string | null>(null);
   const [boletoBarcode, setBoletoBarcode] = useState<string | null>(null);
-
-  // status em tempo real (Pix/Boleto)
-  const [liveStatus, setLiveStatus] = useState<
-    "idle" | "pending" | "approved" | "rejected" | "cancelled" | "expired"
-  >("idle");
-
-  const [liveStatusDetail, setLiveStatusDetail] = useState<string | null>(null);
 
   const pollRef = useRef<number | null>(null);
 
@@ -1636,7 +1672,7 @@ export default function Pay({
   const startPollingPayment = useCallback(
     (paymentId: string, kind: "pix" | "boleto") => {
       stopPolling();
-      setLiveStatus("pending");
+setLiveStatus(null);
       setLiveStatusDetail(null);
 
       pollRef.current = window.setInterval(async () => {
@@ -1706,21 +1742,21 @@ export default function Pay({
   );
 
   useEffect(() => {
-  if (!open) return;
+    if (!open) return;
 
-  const mail = String(discordEmail || "").trim();
-  if (!mail) return;
+    const mail = String(discordEmail || "").trim();
+    if (!mail) return;
 
-  // ✅ só preenche se usuário não mexeu e o campo está vazio
-  setEmail((prev) => {
-    const cur = String(prev || "").trim();
-    if (cardEmailTouchedRef.current) return prev;
-    return cur ? prev : mail;
-  });
+    // ✅ só preenche se usuário não mexeu e o campo está vazio
+    setEmail((prev) => {
+      const cur = String(prev || "").trim();
+      if (cardEmailTouchedRef.current) return prev;
+      return cur ? prev : mail;
+    });
 
-  // ✅ não deixa erro “fantasma” quando preenche
-  setEmailError(null);
-}, [open, discordEmail]);
+    // ✅ não deixa erro “fantasma” quando preenche
+    setEmailError(null);
+  }, [open, discordEmail]);
 
   // FOOTER MEASURE (para não cobrir inputs)
   const footerRef = useRef<HTMLDivElement | null>(null);
@@ -1747,6 +1783,162 @@ export default function Pay({
     "idle" | "loading" | "success" | "error"
   >("idle");
   const actionTimerRef = useRef<number | null>(null);
+
+  type DevAction = "approve" | "reject" | "expire";
+  type DevStatus = "approved" | "rejected" | "expired";
+
+  const [devAllowed, setDevAllowed] = useState(false);
+  const [devMenuOpen, setDevMenuOpen] = useState(false);
+  const [devActionLoading, setDevActionLoading] = useState<DevAction | null>(
+    null,
+  );
+  const [devError, setDevError] = useState<string | null>(null);
+
+  function devActionToStatus(a: DevAction): DevStatus {
+    if (a === "approve") return "approved";
+    if (a === "reject") return "rejected";
+    return "expired";
+  }
+
+  // ✅ Checa permissão no server (cookie -> supabase dev_permission)
+  useEffect(() => {
+    if (!open) return;
+
+    let alive = true;
+
+    (async () => {
+      try {
+        const r = await fetch("/api/pagment/dev", {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!alive) return;
+
+        setDevAllowed(!!j?.allowed);
+      } catch {
+        if (!alive) return;
+        setDevAllowed(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [open]);
+
+  // ✅ fecha menu ao clicar fora / ESC
+  const devWrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!devMenuOpen) return;
+
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (devWrapRef.current?.contains(t)) return;
+      setDevMenuOpen(false);
+    };
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDevMenuOpen(false);
+    };
+
+    document.addEventListener("mousedown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+
+    return () => {
+      document.removeEventListener("mousedown", onDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [devMenuOpen]);
+
+  function applyDevStatus(status: DevStatus, detail?: string | null) {
+    stopPolling();
+
+    setLiveStatus(status as any);
+    setLiveStatusDetail(detail || `DEV override: ${status}`);
+
+    // feedback visual no botão principal
+    if (status === "approved") {
+      setActionState("success");
+      if (actionTimerRef.current) window.clearTimeout(actionTimerRef.current);
+      actionTimerRef.current = window.setTimeout(
+        () => setActionState("idle"),
+        900,
+      );
+    } else {
+      setActionState("error");
+      if (actionTimerRef.current) window.clearTimeout(actionTimerRef.current);
+      actionTimerRef.current = window.setTimeout(
+        () => setActionState("idle"),
+        900,
+      );
+    }
+
+    // PIX: simula como se tivesse mudado o status real
+    if (method === "pix") {
+      if (status === "approved") {
+        setPixStep("success");
+        setPixCopied(false);
+        setPixQrBase64(null);
+        setPixCopyPaste("");
+        return;
+      }
+
+      // falha: força a tela de erro (que você já tem para expired/rejected)
+      setPixStep("qr");
+      return;
+    }
+
+    // BOLETO: mantém step; liveStatus serve pra você exibir badge/mensagem se quiser
+    if (method === "boleto") {
+      // opcional: se quiser, pode manter o boletoStep como está.
+      // aqui não mexo no boletoStep pra não quebrar seu fluxo atual.
+      return;
+    }
+
+    // CARD: se você tiver UI de card, use liveStatus também
+  }
+
+  async function runDevAction(action: DevAction) {
+    setDevError(null);
+    setDevActionLoading(action);
+
+    try {
+      const r = await fetch("/api/pagment/dev", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          action,
+          kind: method, // opcional (pix|boleto|card) - só pra log/retorno
+        }),
+      });
+
+      const j = await r.json().catch(() => null);
+
+      if (!r.ok || !j?.ok) {
+        throw new Error(j?.message || "Falha ao executar DEV action.");
+      }
+
+      const status = String(j.status || devActionToStatus(action)) as DevStatus;
+      const detail = j.status_detail ? String(j.status_detail) : null;
+
+      applyDevStatus(status, detail);
+      setDevMenuOpen(false);
+    } catch (e: any) {
+      setDevError(String(e?.message || "Erro DEV."));
+    } finally {
+      setDevActionLoading(null);
+    }
+  }
 
   // Modal focus trap
   const modalCardRef = useRef<HTMLDivElement | null>(null);
@@ -1860,52 +2052,51 @@ export default function Pay({
   }, [open]);
 
   useEffect(() => {
-  let alive = true;
+    let alive = true;
 
-  const loadDiscordEmailFromSupabase = async () => {
-    try {
-      const res = await fetch("/api/me", {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-        headers: {
-          Accept: "application/json",
-        },
-      });
+    const loadDiscordEmailFromSupabase = async () => {
+      try {
+        const res = await fetch("/api/me", {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          headers: {
+            Accept: "application/json",
+          },
+        });
 
-      const data = await res.json().catch(() => null);
-      const mail = String(data?.user?.email || "").trim();
+        const data = await res.json().catch(() => null);
+        const mail = String(data?.user?.email || "").trim();
 
-      if (!alive) return;
+        if (!alive) return;
 
-      setDiscordEmail(mail);
+        setDiscordEmail(mail);
 
-      // ✅ CARD: pré-preenche, mas usuário pode apagar/trocar
-      if (mail && !String(email || "").trim()) {
-        setEmail(mail);
+        // ✅ CARD: pré-preenche, mas usuário pode apagar/trocar
+        if (mail && !String(email || "").trim()) {
+          setEmail(mail);
+        }
+
+        // ✅ BOLETO: pré-preenche, mas usuário pode apagar/trocar
+        if (mail && !String(boletoEmail || "").trim()) {
+          setBoletoEmail(mail);
+        }
+      } catch {
+        // não quebra UI
       }
+    };
 
-      // ✅ BOLETO: pré-preenche, mas usuário pode apagar/trocar
-      if (mail && !String(boletoEmail || "").trim()) {
-        setBoletoEmail(mail);
-      }
-    } catch {
-      // não quebra UI
-    }
-  };
+    loadDiscordEmailFromSupabase();
 
-  loadDiscordEmailFromSupabase();
-
-  return () => {
-    alive = false;
-  };
-  // ⚠️ intencional: roda 1x ao abrir o Pay
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []);
+    return () => {
+      alive = false;
+    };
+    // ⚠️ intencional: roda 1x ao abrir o Pay
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (open) {
-
       setPixStep("form");
       setPixName("");
       setPixCpf("");
@@ -1916,7 +2107,6 @@ export default function Pay({
 
       setMethod("card");
 
-      setCouponMode("closed");
       setCoupon("");
       setCouponError(null);
       setCouponValidating(false);
@@ -1932,7 +2122,7 @@ export default function Pay({
       setZipError(null);
       setCityLocked(false);
       setStateAutoHint(null);
-      setAppliedCouponMeta(null);
+
 
       cardEmailTouchedRef.current = false; // ✅ reset do “tocou no campo” ao abrir
 
@@ -1973,8 +2163,7 @@ export default function Pay({
       setBoletoPaymentId(null);
       setBoletoBarcode(null);
 
-      // reset do status + polling
-      setLiveStatus("idle");
+ 
       setLiveStatusDetail(null);
 
       setPixErrors({});
@@ -2016,19 +2205,19 @@ export default function Pay({
     return () => document.removeEventListener("mousedown", onDown, true);
   }, [couponMode]);
 
-
   type AppliedCouponMeta = {
-  code: string;
-  source: "coupon" | "gift_coupon";
-  discount: {
-    kind: "percent" | "amount" | "target_total";
-    percent: number | null;
-    amount_cents: number | null;
-    target_total_cents: number | null;
+    code: string;
+    source: "coupon" | "gift_coupon";
+    discount: {
+      kind: "percent" | "amount" | "target_total";
+      percent: number | null;
+      amount_cents: number | null;
+      target_total_cents: number | null;
+    };
   };
-};
 
-const [appliedCouponMeta, setAppliedCouponMeta] = useState<AppliedCouponMeta | null>(null);
+  const [appliedCouponMeta, setAppliedCouponMeta] =
+    useState<AppliedCouponMeta | null>(null);
 
   // Ajusta defaults quando muda país (evita inconsistências visuais / select inválido)
   useEffect(() => {
@@ -2077,34 +2266,34 @@ const [appliedCouponMeta, setAppliedCouponMeta] = useState<AppliedCouponMeta | n
 
     const baseTotalCents = subtotalCents + taxCents;
 
-const appliedCode = coupon.trim().toUpperCase();
+    const appliedCode = coupon.trim().toUpperCase();
 
-const hasApplied =
-  couponMode === "applied" &&
-  !!appliedCouponMeta &&
-  appliedCouponMeta.code === appliedCode;
+    const hasApplied =
+      couponMode === "applied" &&
+      !!appliedCouponMeta &&
+      appliedCouponMeta.code === appliedCode;
 
-let discountCents = 0;
-let totalCents = baseTotalCents;
-let discountLabel: string | null = null;
+    let discountCents = 0;
+    let totalCents = baseTotalCents;
+    let discountLabel: string | null = null;
 
-if (hasApplied) {
-  const d = appliedCouponMeta.discount;
+    if (hasApplied) {
+      const d = appliedCouponMeta.discount;
 
-  if (d.kind === "percent") {
-    const pct = Math.max(0, Math.min(100, Number(d.percent || 0)));
-    discountCents = Math.round((baseTotalCents * pct) / 100);
-  } else if (d.kind === "amount") {
-    discountCents = Math.max(0, Number(d.amount_cents || 0));
-  } else if (d.kind === "target_total") {
-    const target = Math.max(0, Number(d.target_total_cents || 0));
-    discountCents = Math.max(0, baseTotalCents - target);
-  }
+      if (d.kind === "percent") {
+        const pct = Math.max(0, Math.min(100, Number(d.percent || 0)));
+        discountCents = Math.round((baseTotalCents * pct) / 100);
+      } else if (d.kind === "amount") {
+        discountCents = Math.max(0, Number(d.amount_cents || 0));
+      } else if (d.kind === "target_total") {
+        const target = Math.max(0, Number(d.target_total_cents || 0));
+        discountCents = Math.max(0, baseTotalCents - target);
+      }
 
-  discountCents = Math.min(discountCents, baseTotalCents);
-  totalCents = Math.max(0, baseTotalCents - discountCents);
-  discountLabel = `Cupom (${appliedCode})`;
-}
+      discountCents = Math.min(discountCents, baseTotalCents);
+      totalCents = Math.max(0, baseTotalCents - discountCents);
+      discountLabel = `Cupom (${appliedCode})`;
+    }
 
     return {
       subtotal: centsToNumber(subtotalCents),
@@ -2119,60 +2308,65 @@ if (hasApplied) {
   const billingNote =
     safeBilling === "annual" ? "Cobrança anual" : "Cobrança mensal";
 
-const pixFailed =
-  method === "pix" &&
-  pixStep === "qr" &&
-  (liveStatus === "cancelled" ||
-    liveStatus === "expired" ||
-    liveStatus === "rejected");
+  const pixFailed =
+    method === "pix" &&
+    pixStep === "qr" &&
+    (liveStatus === "cancelled" ||
+      liveStatus === "expired" ||
+      liveStatus === "rejected");
 
-const pixPaid =
-  method === "pix" && (pixStep === "success" || liveStatus === "approved");
+  const pixPaid =
+    method === "pix" && (pixStep === "success" || liveStatus === "approved");
 
-const pixAwaiting =
-  method === "pix" && pixStep === "qr" && !pixFailed && !pixPaid;
+  const pixAwaiting =
+    method === "pix" && pixStep === "qr" && !pixFailed && !pixPaid;
 
-const basePrimaryBtnLabel =
-  method === "card"
-    ? `Pagar ${formatBRL(order.total)}`
-    : method === "pix"
-      ? pixPaid
-        ? "Pagamento Efetuado"
-        : pixFailed
-          ? "Tentar novamente"
-          : pixStep === "qr"
-            ? "Aguardando Pagamento"
-            : "Continuar"
-      : boletoStep === "generated"
-        ? "Boleto gerado"
-        : "Enviar Boleto";
+  const basePrimaryBtnLabel =
+    method === "card"
+      ? `Pagar ${formatBRL(order.total)}`
+      : method === "pix"
+        ? pixPaid
+          ? "Pagamento Efetuado"
+          : pixFailed
+            ? "Tentar novamente"
+            : pixStep === "qr"
+              ? "Aguardando Pagamento"
+              : "Continuar"
+        : boletoStep === "generated"
+          ? "Boleto gerado"
+          : "Enviar Boleto";
 
-// ✅ Pix: quando gerou QR fica travado (Aguardando Pagamento).
-// ✅ Só libera quando falhar (cancelado/expirado/recusado) para "Tentar novamente".
+const isFailed =
+  liveStatus === "expired" ||
+  liveStatus === "rejected" ||
+  liveStatus === "cancelled";
+
+const showRetryCta = isFailed;
+
 const primaryBtnDisabled =
   actionState === "loading" ||
-  (method === "pix" && (pixAwaiting || pixPaid)) ||
-  (method === "boleto" && boletoStep === "generated");
+  (!showRetryCta && method === "pix" && (pixAwaiting || pixPaid)) ||
+  (!showRetryCta && method === "boleto" && boletoStep === "generated");
 
-// ✅ Pix não deve mostrar "Pix gerado" — sempre "Aguardando Pagamento" quando tiver QR.
-const primaryBtnLabel =
-  method === "pix"
-    ? actionState === "loading"
-      ? " " // processando...
-      : pixPaid
-        ? "Pagamento Efetuado"
-        : pixFailed
-          ? "Tentar novamente"
-          : pixStep === "qr"
-            ? "Aguardando Pagamento"
-            : "Continuar"
-    : actionState === "loading"
-      ? " " // processando...
-      : actionState === "success"
-        ? method === "card"
-          ? "Pagamento confirmado"
-          : "Boleto enviado"
-        : basePrimaryBtnLabel;
+  // ✅ Pix não deve mostrar "Pix gerado" — sempre "Aguardando Pagamento" quando tiver QR.
+  const primaryBtnLabel =
+    method === "pix"
+      ? actionState === "loading"
+        ? " " // processando...
+        : pixPaid
+          ? "Pagamento Efetuado"
+          : pixFailed
+            ? "Tentar novamente"
+            : pixStep === "qr"
+              ? "Aguardando Pagamento"
+              : "Continuar"
+      : actionState === "loading"
+        ? " " // processando...
+        : actionState === "success"
+          ? method === "card"
+            ? "Pagamento confirmado"
+            : "Boleto enviado"
+          : basePrimaryBtnLabel;
 
   // Validação inteligente “live” (leve + não intrusiva)
   const emailLiveTimer = useRef<number | null>(null);
@@ -2462,6 +2656,35 @@ const primaryBtnLabel =
     }
   }
 
+  function resetPixForRetry() {
+    // ✅ para qualquer polling atual
+    stopPolling();
+
+    // ✅ limpa QR e ID antigo
+    setPixQrBase64(null);
+    setPixCopyPaste("");
+    setPixPaymentId(null);
+
+    // ✅ volta pro começo (igual primeira vez)
+    setPixStep("form");
+
+    // ✅ limpa dados pra digitar de novo
+    setPixName("");
+    setPixCpf("");
+    setPixNameError(null);
+    setPixCpfError(null);
+
+    // ✅ limpa UI de status antigo (evita "falhou" instantâneo no novo Pix)
+    try {
+      // se você tiver esses states, mantém:
+      setLiveStatus("pending" as any);
+      setLiveStatusDetail(null as any);
+    } catch {}
+
+    setActionState("idle");
+    clearActionTimer();
+  }
+
   function handleZipBlur() {
     if (!zip.trim()) return;
     if (!isZipComplete(country, zip)) {
@@ -2495,113 +2718,117 @@ const primaryBtnLabel =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zip, country, open]);
 
-function startCouponEditSmart() {
-  setCouponError(null);
-  setCouponValidating(false);
-  setCouponMode("editing");
+  function startCouponEditSmart() {
+    if (uiLocked) return; // ✅ não deixa mexer após aprovado
 
-  // ✅ remove meta aplicada pra recalcular total sem cupom
-  setAppliedCouponMeta(null);
+    setCouponError(null);
+    setCouponValidating(false);
+    setCouponMode("editing");
 
-  // ✅ ao entrar em edição (veio de "applied"), já remove cupom no Pix e regera o QR
-  setTimeout(() => {
-    refreshPixWithCoupon(null);
-  }, 0);
-}
+    // ✅ remove meta aplicada pra recalcular total sem cupom
+    setAppliedCouponMeta(null);
 
-function cancelCouponEdit() {
-  setCouponError(null);
-  setCouponValidating(false);
-
-  if (lastAppliedRef.current) {
-    setCoupon(lastAppliedRef.current);
-    setCouponMode("applied");
-    // ✅ mantém meta aplicada (não mexe)
-    return;
+    // ✅ ao entrar em edição (veio de "applied"), já remove cupom no Pix e regera o QR
+    setTimeout(() => {
+      if (!uiLocked) refreshPixWithCoupon(null);
+    }, 0);
   }
 
-  setAppliedCouponMeta(null);
-  setCouponMode("closed");
-}
-
- async function validateCoupon(rawValue?: string) {
-  const source = typeof rawValue === "string" ? rawValue : coupon;
-  const code = source.trim().toUpperCase();
-
-  // apagou => remove e regera Pix se já tiver QR
-  if (!code) {
+  function cancelCouponEdit() {
     setCouponError(null);
     setCouponValidating(false);
 
-    lastAppliedRef.current = "";
-    setCoupon("");
-    setCouponMode("closed");
-
-    setAppliedCouponMeta(null);
-
-    setTimeout(() => {
-      refreshPixWithCoupon(null);
-    }, 0);
-
-    return;
-  }
-
-  setCouponError(null);
-  setCouponValidating(true);
-
-  try {
-    const res = await fetch(
-      `/api/pagment/cupom?code=${encodeURIComponent(code)}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-        headers: { Accept: "application/json" },
-      },
-    );
-
-    const j = await res.json().catch(() => null);
-
-    if (!res.ok || !j?.ok) {
-      throw new Error(j?.message || "Falha ao validar cupom.");
-    }
-
-    if (!j.valid) {
-      setCouponValidating(false);
-      setCouponError(j?.message || "Cupom inválido ou indisponível.");
-      setCouponMode("editing");
-      setTimeout(() => couponRef.current?.focus(), 10);
+    if (lastAppliedRef.current) {
+      setCoupon(lastAppliedRef.current);
+      setCouponMode("applied");
+      // ✅ mantém meta aplicada (não mexe)
       return;
     }
 
-    // ✅ válido
-    lastAppliedRef.current = code;
-    setCoupon(code);
-    setCouponMode("applied");
-
-    setAppliedCouponMeta({
-      code,
-      source: j.source,
-      discount: {
-        kind: j.discount?.kind,
-        percent: j.discount?.percent ?? null,
-        amount_cents: j.discount?.amount_cents ?? null,
-        target_total_cents: j.discount?.target_total_cents ?? null,
-      },
-    });
-
-    setCouponValidating(false);
-
-    setTimeout(() => {
-      refreshPixWithCoupon(code);
-    }, 0);
-  } catch {
-    setCouponValidating(false);
-    setCouponError("Cupom inválido ou indisponível.");
-    setCouponMode("editing");
-    setTimeout(() => couponRef.current?.focus(), 10);
+    setAppliedCouponMeta(null);
+    setCouponMode("closed");
   }
-}
+
+  async function validateCoupon(rawValue?: string) {
+    if (uiLocked) return; // ✅ não deixa mexer após aprovado
+
+    const source = typeof rawValue === "string" ? rawValue : coupon;
+    const code = source.trim().toUpperCase();
+
+    // apagou => remove e regera Pix se já tiver QR
+    if (!code) {
+      setCouponError(null);
+      setCouponValidating(false);
+
+      lastAppliedRef.current = "";
+      setCoupon("");
+      setCouponMode("closed");
+
+      setAppliedCouponMeta(null);
+
+      setTimeout(() => {
+        if (!uiLocked) refreshPixWithCoupon(null);
+      }, 0);
+
+      return;
+    }
+
+    setCouponError(null);
+    setCouponValidating(true);
+
+    try {
+      const res = await fetch(
+        `/api/pagment/cupom?code=${encodeURIComponent(code)}`,
+        {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        },
+      );
+
+      const j = await res.json().catch(() => null);
+
+      if (!res.ok || !j?.ok) {
+        throw new Error(j?.message || "Falha ao validar cupom.");
+      }
+
+      if (!j.valid) {
+        setCouponValidating(false);
+        setCouponError(j?.message || "Cupom inválido ou indisponível.");
+        setCouponMode("editing");
+        setTimeout(() => couponRef.current?.focus(), 10);
+        return;
+      }
+
+      // ✅ válido
+      lastAppliedRef.current = code;
+      setCoupon(code);
+      setCouponMode("applied");
+
+      setAppliedCouponMeta({
+        code,
+        source: j.source,
+        discount: {
+          kind: j.discount?.kind,
+          percent: j.discount?.percent ?? null,
+          amount_cents: j.discount?.amount_cents ?? null,
+          target_total_cents: j.discount?.target_total_cents ?? null,
+        },
+      });
+
+      setCouponValidating(false);
+
+      setTimeout(() => {
+        if (!uiLocked) refreshPixWithCoupon(code);
+      }, 0);
+    } catch {
+      setCouponValidating(false);
+      setCouponError("Cupom inválido ou indisponível.");
+      setCouponMode("editing");
+      setTimeout(() => couponRef.current?.focus(), 10);
+    }
+  }
 
   function validateEmailField(v: string) {
     const ok = isValidEmail(v);
@@ -2808,21 +3035,21 @@ function cancelCouponEdit() {
         planTitle,
         planDescription,
         payer:
-  methodToCreate === "pix"
-    ? { email: discordEmail, cpf: onlyDigits(pixCpf), name: pixName }
-    : {
-        email: boletoEmail,
-        cpf: onlyDigits(boletoCpf),
-        name: boletoName,
-        address: {
-          zip_code: onlyDigits(boletoZip),
-          street_name: boletoStreetName,
-          street_number: boletoStreetNumber,
-          neighborhood: boletoNeighborhood,
-          city: boletoCity,
-          federal_unit: boletoUF,
-        },
-      },
+          methodToCreate === "pix"
+            ? { email: discordEmail, cpf: onlyDigits(pixCpf), name: pixName }
+            : {
+                email: boletoEmail,
+                cpf: onlyDigits(boletoCpf),
+                name: boletoName,
+                address: {
+                  zip_code: onlyDigits(boletoZip),
+                  street_name: boletoStreetName,
+                  street_number: boletoStreetNumber,
+                  neighborhood: boletoNeighborhood,
+                  city: boletoCity,
+                  federal_unit: boletoUF,
+                },
+              },
 
         send_email: methodToCreate === "boleto",
         coupon: couponMode === "applied" ? coupon.trim() : null,
@@ -2922,14 +3149,114 @@ function cancelCouponEdit() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boletoName, boletoCpf, boletoEmail]);
 
+  type FinalStatus = "approved" | "cancelled" | "expired" | "rejected";
+
+  const [localFinalStatus, setLocalFinalStatus] = useState<FinalStatus | null>(
+    null,
+  );
+
+  // ✅ status efetivo: polling (liveStatus) OU finalização local (cartão)
+  const effectiveStatus = localFinalStatus ?? liveStatus;
+
+const paymentLockedByStatus =
+  effectiveStatus === "approved" ||
+  effectiveStatus === "cancelled" ||
+  effectiveStatus === "expired" ||
+  effectiveStatus === "rejected";
+
+  // ✅ aprovado global (vale pra qualquer método)
+  const paymentApproved = effectiveStatus === "approved";
+
+  // ✅ trava UI depois de aprovado
+  const uiLocked = paymentApproved;
+
   // Auto-avanço (inteligência) sem ser agressivo
   const lastCardDigitsLenRef = useRef(0);
   const lastExpDigitsLenRef = useRef(0);
 
+  function resetFlowForRetry() {
+  // ✅ limpa qualquer status final global pra sair da tela de falha e destravar abas
+  setLiveStatus(null);
+  setLiveStatusDetail(null);
+
+  // destrava status final (inclusive cartão)
+  setLocalFinalStatus(null);
+
+  // encerra polling / timers
+  stopPolling();
+  clearActionTimer();
+  setActionState("idle");
+
+  // destrava cupom (volta pro estado fechado)
+setCouponError(null);
+setCouponValidating(false);
+couponInteractedRef.current = false;
+
+  // reseta por método
+  if (method === "pix") {
+    resetPixForRetry();
+    return;
+  }
+
+  if (method === "boleto") {
+    setBoletoStep("form");
+    setBoletoPaymentId("");
+    setBoletoTicketUrl(null);
+    setBoletoBarcode(null);
+    setPayment(null);
+    setBoletoSentToEmail("");
+    setBoletoErrors({});
+
+    // (opcional, mas fica “como no início”)
+    setBoletoEmail(discordEmail || "");
+    setBoletoName("");
+    setBoletoCpf("");
+    setBoletoZip("");
+    setBoletoStreetName("");
+    setBoletoStreetNumber("");
+    setBoletoNeighborhood("");
+    setBoletoCity("");
+    setBoletoUF("SP");
+    return;
+  }
+
+  // card: volta pro início
+  setEmail(discordEmail || "");
+  setCpf("");
+  setCardNumber("");
+  setExp("");
+  setCvc("");
+  setHolderName("");
+  setEmailError(null);
+  setCardCpfError(null);
+  setHolderNameError(null);
+  setCardErrors({});
+
+  cardEmailTouchedRef.current = false;
+  lastCardDigitsLenRef.current = 0;
+  lastExpDigitsLenRef.current = 0;
+}
+
   async function handlePrimaryAction() {
+    const failedNow =
+      effectiveStatus === "expired" ||
+      effectiveStatus === "rejected" ||
+      effectiveStatus === "cancelled";
+
+    // ✅ se falhou (em qualquer método/tela), o botão vira retry e reseta tudo
+    if (failedNow) {
+      resetFlowForRetry();
+      return;
+    }
+
+    if (uiLocked) return; // ✅ após aprovado, não faz mais nada
     clearActionTimer();
 
+    
+
     setActionState("idle");
+
+    
 
     if (method === "card") {
       const ok = validateCardForm();
@@ -2959,13 +3286,11 @@ function cancelCouponEdit() {
           }),
         });
 
-        // Se quiser depois, aqui você abre Checkout Pro / Brick.
-        setActionState("success");
-        actionTimerRef.current = window.setTimeout(
-          () => setActionState("idle"),
-          1800,
-        );
+        // ✅ fixa aprovado (igual Pix) e não volta pro botão “Pagar”
+        setLocalFinalStatus("approved");
+        setActionState("idle");
       } catch {
+        // (opcional) se você quiser: setLocalFinalStatus("rejected");
         setActionState("error");
         actionTimerRef.current = window.setTimeout(
           () => setActionState("idle"),
@@ -3067,19 +3392,22 @@ function cancelCouponEdit() {
           setPixPaymentId(id);
 
           if (couponMode === "applied" && coupon.trim()) {
-  fetch("/api/pagment/cupom", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    credentials: "include",
-    cache: "no-store",
-    body: JSON.stringify({
-      action: "claim",
-      code: coupon.trim(),
-      payment_id: id,
-      order_id: data.order_id || null,
-    }),
-  }).catch(() => {});
-}
+            fetch("/api/pagment/cupom", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              credentials: "include",
+              cache: "no-store",
+              body: JSON.stringify({
+                action: "claim",
+                code: coupon.trim(),
+                payment_id: id,
+                order_id: data.order_id || null,
+              }),
+            }).catch(() => {});
+          }
 
           if (id) startPollingPayment(id, "pix");
 
@@ -3101,20 +3429,20 @@ function cancelCouponEdit() {
         return;
       }
 
-// Etapa 2: agora o botão fica travado em "Aguardando Pagamento".
-// Só fica clicável se falhar (cancelado/expirado/recusado) => "Tentar novamente" e regenera.
-if (pixStep === "qr") {
-  const failed =
-    liveStatus === "cancelled" ||
-    liveStatus === "expired" ||
-    liveStatus === "rejected";
+      // Etapa 2: agora o botão fica travado em "Aguardando Pagamento".
+      // Se falhar => "Tentar novamente" RESETA (volta pro form) pra pessoa digitar tudo de novo.
+      if (pixStep === "qr") {
+        const failed =
+          liveStatus === "cancelled" ||
+          liveStatus === "expired" ||
+          liveStatus === "rejected";
 
-  if (failed) {
-    await refreshPixWithCoupon(couponMode === "applied" ? coupon.trim() : null);
-  }
+        if (failed) {
+          resetPixForRetry(); // ✅ agora volta pro estado inicial
+        }
 
-  return;
-}
+        return;
+      }
     }
   }
 
@@ -3125,6 +3453,41 @@ if (pixStep === "qr") {
       stopPolling();
     };
   }, [clearActionTimer, stopPolling]);
+
+  const showApprovedAny = effectiveStatus === "approved";
+
+  // 🔒 Travar UI quando finalizado (aprovado ou falhou)
+  const isApproved = effectiveStatus === "approved";
+
+  // trava abas + cupom igual aprovado
+  const lockTabsAndCoupon = isApproved || isFailed;
+
+
+  const primaryBtnLabelResolved = showRetryCta
+    ? "Tentar novamente"
+    : paymentApproved
+      ? "Pagamento Efetuado"
+      : primaryBtnLabel;
+
+  const primaryBtnDisabledResolved = showRetryCta
+    ? actionState === "loading"
+    : paymentApproved
+      ? true
+      : primaryBtnDisabled;
+
+  const showFailedAny =
+    effectiveStatus === "cancelled" ||
+    effectiveStatus === "expired" ||
+    effectiveStatus === "rejected";
+
+  const showPixQrFailed =
+    pixStep === "qr" &&
+    (effectiveStatus === "cancelled" ||
+      effectiveStatus === "expired" ||
+      effectiveStatus === "rejected");
+
+  const showPixSuccess =
+    pixStep === "success" || effectiveStatus === "approved";
 
   return (
     <AnimatePresence>
@@ -3155,6 +3518,92 @@ if (pixStep === "qr") {
             >
               <IconClose className="h-7 w-7" />
             </button>
+
+            {/* ✅ DEV BUTTON (canto inferior esquerdo do modal) */}
+            {devAllowed && (
+              <div
+                ref={devWrapRef}
+                className="absolute left-4 bottom-4 z-[10020]"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDevError(null);
+                    setDevMenuOpen((s) => !s);
+                  }}
+                  className="rounded-xl border border-white/10 bg-black/70 px-3 py-2
+                   text-[11px] font-semibold text-white/80 hover:bg-black/85 transition
+                   shadow-[0_18px_55px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+                >
+                  DEV
+                </button>
+
+                <AnimatePresence>
+                  {devMenuOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                      transition={{ duration: 0.18, ease: "easeOut" }}
+                      className="mt-2 w-[220px] overflow-hidden rounded-2xl border border-white/10
+               bg-black/75 backdrop-blur-2xl
+               shadow-[0_28px_80px_rgba(0,0,0,0.70)]"
+                    >
+                      <div className="p-2 space-y-2">
+                        <button
+                          type="button"
+                          onClick={() => runDevAction("approve")}
+                          disabled={!!devActionLoading}
+                          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2
+                   text-left text-[12px] font-semibold text-white/85 hover:bg-white/[0.06] transition
+                   disabled:opacity-60"
+                        >
+                          {devActionLoading === "approve"
+                            ? "Aprovando..."
+                            : "Aprovar"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => runDevAction("reject")}
+                          disabled={!!devActionLoading}
+                          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2
+                   text-left text-[12px] font-semibold text-white/85 hover:bg-white/[0.06] transition
+                   disabled:opacity-60"
+                        >
+                          {devActionLoading === "reject"
+                            ? "Recusando..."
+                            : "Recusar"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => runDevAction("expire")}
+                          disabled={!!devActionLoading}
+                          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2
+                   text-left text-[12px] font-semibold text-white/85 hover:bg-white/[0.06] transition
+                   disabled:opacity-60"
+                        >
+                          {devActionLoading === "expire"
+                            ? "Expirando..."
+                            : "Expirar"}
+                        </button>
+
+                        {!!devError && (
+                          <div className="pt-1 text-[11px] text-red-400/90">
+                            {devError}
+                          </div>
+                        )}
+
+                        <div className="pt-1 text-[10px] text-white/35">
+                          *Ação DEV (simulação de status)
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
 
             <motion.div
               ref={modalCardRef}
@@ -3351,6 +3800,7 @@ if (pixStep === "qr") {
                                         <input
                                           ref={couponRef}
                                           value={coupon}
+                                          disabled={lockTabsAndCoupon}
                                           onPointerDown={() => {
                                             couponInteractedRef.current = true; // ✅ clicou no input
                                           }}
@@ -3392,6 +3842,7 @@ if (pixStep === "qr") {
                                           ) : (
                                             <button
                                               type="button"
+                                              disabled={uiLocked}
                                               onClick={() => validateCoupon()} // ✅ chama a função (resolve o "vermelho")
                                               className="h-[36px] px-4 rounded-[10px] border border-white/10 bg-white/[0.03]
                                                   text-[12px] font-semibold text-white/85
@@ -3407,7 +3858,9 @@ if (pixStep === "qr") {
                                       <motion.button
                                         key="coupon-applied"
                                         type="button"
+                                        disabled={lockTabsAndCoupon}
                                         onClick={() => {
+                                          if (lockTabsAndCoupon) return;
                                           startCouponEditSmart();
                                         }}
                                         initial={{ opacity: 0, x: 10 }}
@@ -3432,22 +3885,16 @@ if (pixStep === "qr") {
                                       <motion.button
                                         key="coupon-closed"
                                         type="button"
+                                        disabled={lockTabsAndCoupon}
                                         onClick={() => {
+                                          if (lockTabsAndCoupon) return;
+
                                           setCouponError(null);
                                           setCouponValidating(false);
-                                          couponInteractedRef.current = false; // ✅ importante
+                                          couponInteractedRef.current = false;
                                           setCouponMode("editing");
                                         }}
-                                        initial={{ opacity: 0, x: 10 }}
-                                        animate={{ opacity: 1, x: 0 }}
-                                        exit={{ opacity: 0, x: 10 }}
-                                        transition={{
-                                          duration: 0.18,
-                                          ease: "easeOut",
-                                        }}
-                                        className="h-[42px] w-full rounded-xl border border-white/10 bg-white/[0.03] px-4
-                                                        text-[12px] font-semibold text-white/70
-                                                        hover:bg-white/[0.06] hover:text-white transition inline-flex items-center justify-center"
+                                        className={`h-[42px] w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[12px] font-semibold text-white/70 hover:bg-white/[0.06] hover:text-white transition inline-flex items-center justify-center ${lockTabsAndCoupon ? "opacity-50 cursor-not-allowed pointer-events-none" : ""}`}
                                       >
                                         Add code
                                       </motion.button>
@@ -3620,20 +4067,25 @@ if (pixStep === "qr") {
                               return (
                                 <button
                                   key={m.key}
+                                  disabled={paymentLockedByStatus}
                                   onClick={() => {
+                                    if (paymentLockedByStatus) return;
+
                                     setMethod(m.key);
                                     setActionState("idle");
                                     clearActionTimer();
                                   }}
                                   className={`relative flex items-center justify-center gap-2 rounded-xl px-3 sm:px-4 py-2 text-[13px] font-semibold transition
-                                    ${
-                                      active
-                                        ? "bg-white/[0.06] text-white border border-[#214FC4]/60 shadow-[0_0_0_2px_rgba(33,79,196,0.18)]"
-                                        : "text-white/55 hover:text-white hover:bg-white/[0.04] border border-white/10"
-                                    }`}
+    ${
+      active
+        ? "bg-white/[0.06] text-white border border-[#214FC4]/60 shadow-[0_0_0_2px_rgba(33,79,196,0.18)]"
+        : "text-white/55 hover:text-white hover:bg-white/[0.04] border border-white/10"
+    }
+    ${paymentLockedByStatus ? "opacity-50 cursor-not-allowed pointer-events-none" : ""}`}
                                 >
                                   {m.icon}
                                   {m.label}
+
                                   {active && (
                                     <motion.span
                                       layoutId="method-underline"
@@ -3651,12 +4103,11 @@ if (pixStep === "qr") {
                           </div>
                         </div>
 
-                        {/* CONTENT */}
                         <div className="w-full min-w-0 pb-5">
                           <AnimatePresence mode="wait">
-                            {method === "card" && (
+                            {showApprovedAny ? (
                               <motion.div
-                                key="card"
+                                key="approved-any"
                                 initial={
                                   reduceMotion
                                     ? { opacity: 0 }
@@ -3679,318 +4130,58 @@ if (pixStep === "qr") {
                                 }
                                 className="mt-6 w-full min-w-0"
                               >
-                                <Field
-  ref={emailRef}
-  label="E-mail"
-  placeholder="seuemail@exemplo.com"
-  value={email}
-  onChange={(v) => {
-    cardEmailTouchedRef.current = true; // ✅ usuário mexeu
-    setEmail(v);
-    if (emailError) setEmailError(null);
-  }}
-  onBlur={() => {
-    const v = String(email || "");
-    // ✅ se ele não tocou e ainda tá vazio, não mostra erro
-    if (!cardEmailTouchedRef.current && !v.trim()) {
-      setEmailError(null);
-      return;
-    }
-    setEmailError(validateEmailField(v));
-  }}
-  error={emailError}
-  type="email"
-  autoComplete="email"
-  name="email"
-  inputClassName=""
-  shakeSignal={shakeSignal}
-/>
+                                <div className="w-full rounded-2xl border border-white/10 bg-black/25 p-5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
+                                  <div className="py-3 flex flex-col items-center text-center">
+                                    <motion.div
+                                      initial={{
+                                        opacity: 0,
+                                        y: 10,
+                                        scale: 0.98,
+                                      }}
+                                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                                      transition={{
+                                        duration: 0.28,
+                                        ease: "easeOut",
+                                      }}
+                                      className="text-[18px] font-semibold text-white"
+                                    >
+                                      Pagamento Aprovado
+                                    </motion.div>
 
-                                <div className="mt-4">
-                                  <Field
-                                    ref={cardNumberRef}
-                                    label="Número do Cartão"
-                                    placeholder="1234 1234 1234 1234"
-                                    value={cardNumber}
-                                    onChange={(v) => {
-                                      const next = formatCardNumber(v);
-                                      setCardNumber(next);
+                                    <motion.div
+                                      initial={{ opacity: 0, scale: 0.92 }}
+                                      animate={{ opacity: 1, scale: 1 }}
+                                      transition={{
+                                        duration: 0.35,
+                                        ease: "easeOut",
+                                        delay: 0.05,
+                                      }}
+                                      className="mt-6"
+                                    >
+                                      <div className="relative">
+                                        <div className="absolute inset-0 rounded-full bg-emerald-500/12 blur-2xl" />
+                                        <div className="relative rounded-full border border-white/10 bg-white/[0.03] p-5 shadow-[0_18px_55px_rgba(0,0,0,0.55)]">
+                                          <IconCheckCircleGreen className="h-[170px] w-[170px]" />
+                                        </div>
+                                      </div>
+                                    </motion.div>
 
-                                      if (cardErrors.cardNumber)
-                                        setCardErrors((s) => ({
-                                          ...s,
-                                          cardNumber: null,
-                                        }));
+                                    <div className="mt-4 max-w-[420px] text-[12px] leading-relaxed text-white/55">
+                                      Pagamento confirmado com sucesso. Você já
+                                      pode fechar esta janela.
+                                    </div>
 
-                                      // auto-avança quando completar (sem ser agressivo)
-                                      const digits = onlyDigits(next);
-                                      const b = detectBrand(digits);
-                                      const allowed = getCardAllowedLengths(b);
-
-                                      const prevLen =
-                                        lastCardDigitsLenRef.current;
-                                      lastCardDigitsLenRef.current =
-                                        digits.length;
-
-                                      const justCompleted =
-                                        allowed.includes(digits.length) &&
-                                        digits.length > prevLen;
-                                      if (justCompleted && luhnCheck(digits)) {
-                                        window.setTimeout(
-                                          () => expRef.current?.focus(),
-                                          40,
-                                        );
-                                      }
-                                    }}
-                                    onBlur={() => validateCardFields()}
-                                    error={cardErrors.cardNumber || null}
-                                    insideRight={
-                                      <BrandMark
-                                        brand={brand}
-                                        cardDigits={cardDigits}
-                                      />
-                                    }
-                                    inputClassName="pr-[116px]"
-                                    autoComplete="cc-number"
-                                    name="cc-number"
-                                    inputMode="numeric"
-                                    shakeSignal={shakeSignal}
-                                  />
-                                </div>
-
-                                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                                  <Field
-                                    ref={expRef}
-                                    label="Data de Vencimento"
-                                    placeholder="MM / AA"
-                                    value={exp}
-                                    onChange={(v) => {
-                                      const next = formatExpiry(v);
-                                      setExp(next);
-                                      if (cardErrors.exp)
-                                        setCardErrors((s) => ({
-                                          ...s,
-                                          exp: null,
-                                        }));
-
-                                      const d = onlyDigits(next);
-                                      const prev = lastExpDigitsLenRef.current;
-                                      lastExpDigitsLenRef.current = d.length;
-
-                                      if (d.length === 4 && d.length > prev) {
-                                        window.setTimeout(
-                                          () => cvcRef.current?.focus(),
-                                          40,
-                                        );
-                                      }
-                                    }}
-                                    onBlur={() => validateCardFields()}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter")
-                                        validateCardFields();
-                                    }}
-                                    error={cardErrors.exp || null}
-                                    autoComplete="cc-exp"
-                                    name="cc-exp"
-                                    inputMode="numeric"
-                                    shakeSignal={shakeSignal}
-                                  />
-                                  <Field
-                                    ref={cvcRef}
-                                    label="Código de Segurança"
-                                    placeholder={
-                                      brand === "amex" ? "4 dígitos" : "CVC"
-                                    }
-                                    value={cvc}
-                                    onChange={(v) => {
-                                      const next = formatCvc(v, brand);
-                                      setCvc(next);
-                                      if (cardErrors.cvc)
-                                        setCardErrors((s) => ({
-                                          ...s,
-                                          cvc: null,
-                                        }));
-
-                                      const expected = brand === "amex" ? 4 : 3;
-                                      if (
-                                        onlyDigits(next).length === expected
-                                      ) {
-                                        window.setTimeout(
-                                          () => holderNameRef.current?.focus(),
-                                          40,
-                                        );
-                                      }
-                                    }}
-                                    onBlur={() => validateCardFields()}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter")
-                                        validateCardFields();
-                                    }}
-                                    error={cardErrors.cvc || null}
-                                    autoComplete="cc-csc"
-                                    name="cc-csc"
-                                    inputMode="numeric"
-                                    maxLength={brand === "amex" ? 4 : 3}
-                                    shakeSignal={shakeSignal}
-                                  />
-                                </div>
-
-                                <div className="mt-4">
-                                  <Field
-                                    ref={holderNameRef}
-                                    label="Nome Completo"
-                                    placeholder="Maria Silva"
-                                    value={holderName}
-                                    onChange={(v) => {
-                                      setHolderName(v);
-                                      if (holderNameError)
-                                        setHolderNameError(null);
-                                    }}
-                                    onBlur={() => {
-                                      const n = holderName
-                                        .trim()
-                                        .replace(/\s+/g, " ");
-                                      setHolderNameError(
-                                        n.length >= 3
-                                          ? null
-                                          : "Digite o nome completo do titular.",
-                                      );
-                                    }}
-                                    error={holderNameError}
-                                    autoComplete="cc-name"
-                                    name="cc-name"
-                                    shakeSignal={shakeSignal}
-                                  />
-                                </div>
-
-                                <div className="mt-4">
-                                  <Select
-                                    label="Pais"
-                                    value={country}
-                                    options={COUNTRIES}
-                                    onChange={(v) =>
-                                      setCountry(v as CountryKey)
-                                    }
-                                    maxMenuWidth={520}
-                                    maxMenuHeight={240}
-                                  />
-                                </div>
-
-                                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-[0.45fr_1fr]">
-                                  <Field
-                                    ref={zipRef}
-                                    label="Código Postal"
-                                    placeholder={zipPlaceholder(country)}
-                                    value={zip}
-                                    onChange={(v) => {
-                                      setZip(
-                                        normalizeZipForDisplay(country, v),
-                                      );
-                                      if (zipError) setZipError(null);
-                                      setCityLocked(false);
-
-                                      // auto-avança p/ address quando completa
-                                      if (isZipComplete(country, v)) {
-                                        window.setTimeout(
-                                          () => addressRef.current?.focus(),
-                                          40,
-                                        );
-                                      }
-                                    }}
-                                    onBlur={handleZipBlur}
-                                    error={zipError}
-                                    insideRight={
-                                      zipLoading ? <SpinnerInInput /> : null
-                                    }
-                                    inputClassName="pr-[20px]"
-                                    inputMode="numeric"
-                                    shakeSignal={shakeSignal}
-                                  />
-                                  <Field
-                                    ref={addressRef}
-                                    label="Endereço de Cobrança"
-                                    placeholder={
-                                      country === "Brasil"
-                                        ? "Rua, número, bairro"
-                                        : "Street address"
-                                    }
-                                    value={address}
-                                    onChange={setAddress}
-                                    autoComplete="street-address"
-                                    name="address"
-                                    shakeSignal={shakeSignal}
-                                  />
-                                </div>
-
-                                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                                  <Select
-                                    label="Estado / Região"
-                                    value={stateUF}
-                                    options={REGIONS}
-                                    onChange={setStateUF}
-                                    className="md:max-w-[420px]"
-                                    maxMenuWidth={420}
-                                    maxMenuHeight={200}
-                                    right={
-                                      stateAutoHint ? (
-                                        <span className="text-[11px] text-white/35">
-                                          {stateAutoHint}
-                                        </span>
-                                      ) : undefined
-                                    }
-                                  />
-                                  <Field
-                                    label="Cidade"
-                                    placeholder="City"
-                                    value={city}
-                                    onChange={setCity}
-                                    disabled={cityLocked}
-                                    right={
-                                      cityLocked ? (
-                                        <span className="text-[11px] text-white/35">
-                                          Auto
-                                        </span>
-                                      ) : (
-                                        <span className="text-[11px] text-white/35">
-                                          Manual
-                                        </span>
-                                      )
-                                    }
-                                    inputClassName={
-                                      cityLocked ? "cursor-not-allowed" : ""
-                                    }
-                                    autoComplete="address-level2"
-                                    name="city"
-                                    shakeSignal={shakeSignal}
-                                  />
-                                </div>
-
-                                <div className="mt-4">
-                                  <Field
-                                    ref={cpfRef}
-                                    label="CPF"
-                                    placeholder="000.000.000-00"
-                                    value={cpf}
-                                    onChange={(v) => {
-                                      setCpf(formatCPF(v));
-                                      if (cardCpfError) setCardCpfError(null);
-                                    }}
-                                    onBlur={() =>
-                                      setCardCpfError(validateCpfField(cpf))
-                                    }
-                                    error={cardCpfError}
-                                    inputMode="numeric"
-                                    autoComplete="off"
-                                    name="cpf"
-                                    shakeSignal={shakeSignal}
-                                  />
+                                    {!!liveStatusDetail && (
+                                      <div className="mt-3 max-w-[420px] text-[11px] text-white/40">
+                                        {liveStatusDetail}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
                               </motion.div>
-                            )}
-
-                            {method === "pix" && (
+                            ) : showFailedAny ? (
                               <motion.div
-                                key="pix"
+                                key="failed-any"
                                 initial={
                                   reduceMotion
                                     ? { opacity: 0 }
@@ -4013,706 +4204,1247 @@ if (pixStep === "qr") {
                                 }
                                 className="mt-6 w-full min-w-0"
                               >
-                                {/* Campos necessários pro Pix real */}
-                                {/* Campos necessários pro Pix real (agora: Nome + CPF; email vem do cookie) */}
                                 <div className="w-full rounded-2xl border border-white/10 bg-black/25 p-5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
-                                  {/* SUCESSO: limpa tudo e mostra confirmado */}
-                                 {pixStep === "success" ? (
-  <div className="py-10 flex flex-col items-center text-center">
-    ...
-  </div>
-) : pixStep === "qr" &&
-  (liveStatus === "cancelled" ||
-    liveStatus === "expired" ||
-    liveStatus === "rejected") ? (
-  <div className="py-10 flex flex-col items-center text-center">
-    <motion.div
-      initial={{ opacity: 0, y: 10, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ duration: 0.28, ease: "easeOut" }}
-      className="text-[18px] font-semibold text-white"
-    >
-      {liveStatus === "expired"
-        ? "Pagamento Expirado"
-        : liveStatus === "cancelled"
-          ? "Pagamento Cancelado"
-          : "Pagamento Recusado"}
-    </motion.div>
+                                  <div className="py-3 flex flex-col items-center text-center">
+                                    <motion.div
+                                      initial={{
+                                        opacity: 0,
+                                        y: 10,
+                                        scale: 0.98,
+                                      }}
+                                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                                      transition={{
+                                        duration: 0.28,
+                                        ease: "easeOut",
+                                      }}
+                                      className="text-[18px] font-semibold text-white"
+                                    >
+                                      {liveStatus === "expired"
+                                        ? "Pagamento Expirado"
+                                        : liveStatus === "cancelled"
+                                          ? "Pagamento Cancelado"
+                                          : "Pagamento Recusado"}
+                                    </motion.div>
 
-    <motion.div
-      initial={{ opacity: 0, scale: 0.92 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.35, ease: "easeOut", delay: 0.05 }}
-      className="mt-6"
-    >
-      <div className="relative">
-        <div className="absolute inset-0 rounded-full bg-red-500/10 blur-2xl" />
-        <div className="relative rounded-full border border-white/10 bg-white/[0.03] p-5 shadow-[0_18px_55px_rgba(0,0,0,0.55)]">
-          <IconXCircleRed className="h-[170px] w-[170px]" />
-        </div>
-      </div>
-    </motion.div>
+                                    <motion.div
+                                      initial={{ opacity: 0, scale: 0.92 }}
+                                      animate={{ opacity: 1, scale: 1 }}
+                                      transition={{
+                                        duration: 0.35,
+                                        ease: "easeOut",
+                                        delay: 0.05,
+                                      }}
+                                      className="mt-6"
+                                    >
+                                      <div className="relative">
+                                        {/* ✅ Expirado amarelo / Cancelado e Recusado vermelho */}
+                                        <div
+                                          className={`absolute inset-0 rounded-full blur-2xl ${
+                                            liveStatus === "expired"
+                                              ? "bg-amber-500/12"
+                                              : "bg-red-500/10"
+                                          }`}
+                                        />
 
-    <div className="mt-4 max-w-[380px] text-[12px] leading-relaxed text-white/55">
-      {liveStatus === "expired"
-        ? "O QR Code expirou. Clique em "
-        : liveStatus === "cancelled"
-          ? "Este Pix foi cancelado. Clique em "
-          : "O pagamento foi recusado. Clique em "}
-      <span className="text-white/80 font-semibold">Tentar novamente</span>
-      {" "}para gerar um novo Pix.
-    </div>
+                                        <div className="relative rounded-full border border-white/10 bg-white/[0.03] p-5 shadow-[0_18px_55px_rgba(0,0,0,0.55)]">
+                                          {liveStatus === "expired" ? (
+                                            <IconXCircleYellow className="h-[170px] w-[170px] text-amber-400" />
+                                          ) : (
+                                            <IconXCircleRed className="h-[170px] w-[170px] text-red-400" />
+                                          )}
+                                        </div>
+                                      </div>
+                                    </motion.div>
 
-    {!!liveStatusDetail && (
-      <div className="mt-3 max-w-[420px] text-[11px] text-white/40">
-        {liveStatusDetail}
-      </div>
-    )}
-  </div>
-) : (
-                                    <>
-                                      {/* CABEÇALHO normal (só quando não é success) */}
-                                      <div className="flex items-start justify-between gap-4">
-                                        <div>
-                                          <div className="text-[14px] font-semibold text-white">
-                                            Pagamento via Pix
+                                    <div className="mt-4 max-w-[380px] text-[12px] leading-relaxed text-white/55">
+                                      {liveStatus === "expired"
+                                        ? "O pagamento expirou."
+                                        : liveStatus === "cancelled"
+                                          ? "Este pagamento foi cancelado."
+                                          : "O pagamento foi recusado."}{" "}
+                                      Você pode fechar esta janela ou tentar
+                                      novamente pelo fluxo de pagamento.
+                                    </div>
+
+                                    {!!liveStatusDetail && (
+                                      <div className="mt-3 max-w-[420px] text-[11px] text-white/40">
+                                        {liveStatusDetail}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </motion.div>
+                            ) : (
+                              <div key="flow-any">
+                                {method === "card" && (
+                                  <motion.div
+                                    key="card"
+                                    initial={
+                                      reduceMotion
+                                        ? { opacity: 0 }
+                                        : { opacity: 0, y: 10 }
+                                    }
+                                    animate={
+                                      reduceMotion
+                                        ? { opacity: 1 }
+                                        : { opacity: 1, y: 0 }
+                                    }
+                                    exit={
+                                      reduceMotion
+                                        ? { opacity: 0 }
+                                        : { opacity: 0, y: 10 }
+                                    }
+                                    transition={
+                                      reduceMotion
+                                        ? { duration: 0.12 }
+                                        : { duration: 0.25, ease: "easeOut" }
+                                    }
+                                    className="mt-6 w-full min-w-0"
+                                  >
+                                    <Field
+                                      ref={emailRef}
+                                      label="E-mail"
+                                      placeholder="seuemail@exemplo.com"
+                                      value={email}
+                                      onChange={(v) => {
+                                        cardEmailTouchedRef.current = true;
+                                        setEmail(v);
+                                        if (emailError) setEmailError(null);
+                                      }}
+                                      onBlur={() => {
+                                        const v = String(email || "");
+                                        if (
+                                          !cardEmailTouchedRef.current &&
+                                          !v.trim()
+                                        ) {
+                                          setEmailError(null);
+                                          return;
+                                        }
+                                        setEmailError(validateEmailField(v));
+                                      }}
+                                      error={emailError}
+                                      type="email"
+                                      autoComplete="email"
+                                      name="email"
+                                      inputClassName=""
+                                      shakeSignal={shakeSignal}
+                                    />
+
+                                    <div className="mt-4">
+                                      <Field
+                                        ref={cardNumberRef}
+                                        label="Número do Cartão"
+                                        placeholder="1234 1234 1234 1234"
+                                        value={cardNumber}
+                                        onChange={(v) => {
+                                          const next = formatCardNumber(v);
+                                          setCardNumber(next);
+
+                                          if (cardErrors.cardNumber)
+                                            setCardErrors((s) => ({
+                                              ...s,
+                                              cardNumber: null,
+                                            }));
+
+                                          const digits = onlyDigits(next);
+                                          const b = detectBrand(digits);
+                                          const allowed =
+                                            getCardAllowedLengths(b);
+
+                                          const prevLen =
+                                            lastCardDigitsLenRef.current;
+                                          lastCardDigitsLenRef.current =
+                                            digits.length;
+
+                                          const justCompleted =
+                                            allowed.includes(digits.length) &&
+                                            digits.length > prevLen;
+
+                                          if (
+                                            justCompleted &&
+                                            luhnCheck(digits)
+                                          ) {
+                                            window.setTimeout(
+                                              () => expRef.current?.focus(),
+                                              40,
+                                            );
+                                          }
+                                        }}
+                                        onBlur={() => validateCardFields()}
+                                        error={cardErrors.cardNumber || null}
+                                        insideRight={
+                                          <BrandMark
+                                            brand={brand}
+                                            cardDigits={cardDigits}
+                                          />
+                                        }
+                                        inputClassName="pr-[116px]"
+                                        autoComplete="cc-number"
+                                        name="cc-number"
+                                        inputMode="numeric"
+                                        shakeSignal={shakeSignal}
+                                      />
+                                    </div>
+
+                                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                                      <Field
+                                        ref={expRef}
+                                        label="Data de Vencimento"
+                                        placeholder="MM / AA"
+                                        value={exp}
+                                        onChange={(v) => {
+                                          const next = formatExpiry(v);
+                                          setExp(next);
+
+                                          if (cardErrors.exp)
+                                            setCardErrors((s) => ({
+                                              ...s,
+                                              exp: null,
+                                            }));
+
+                                          const d = onlyDigits(next);
+                                          const prev =
+                                            lastExpDigitsLenRef.current;
+                                          lastExpDigitsLenRef.current =
+                                            d.length;
+
+                                          if (
+                                            d.length === 4 &&
+                                            d.length > prev
+                                          ) {
+                                            window.setTimeout(
+                                              () => cvcRef.current?.focus(),
+                                              40,
+                                            );
+                                          }
+                                        }}
+                                        onBlur={() => validateCardFields()}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter")
+                                            validateCardFields();
+                                        }}
+                                        error={cardErrors.exp || null}
+                                        autoComplete="cc-exp"
+                                        name="cc-exp"
+                                        inputMode="numeric"
+                                        shakeSignal={shakeSignal}
+                                      />
+
+                                      <Field
+                                        ref={cvcRef}
+                                        label="Código de Segurança"
+                                        placeholder={
+                                          brand === "amex" ? "4 dígitos" : "CVC"
+                                        }
+                                        value={cvc}
+                                        onChange={(v) => {
+                                          const next = formatCvc(v, brand);
+                                          setCvc(next);
+
+                                          if (cardErrors.cvc)
+                                            setCardErrors((s) => ({
+                                              ...s,
+                                              cvc: null,
+                                            }));
+
+                                          const expected =
+                                            brand === "amex" ? 4 : 3;
+                                          if (
+                                            onlyDigits(next).length === expected
+                                          ) {
+                                            window.setTimeout(
+                                              () =>
+                                                holderNameRef.current?.focus(),
+                                              40,
+                                            );
+                                          }
+                                        }}
+                                        onBlur={() => validateCardFields()}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter")
+                                            validateCardFields();
+                                        }}
+                                        error={cardErrors.cvc || null}
+                                        autoComplete="cc-csc"
+                                        name="cc-csc"
+                                        inputMode="numeric"
+                                        maxLength={brand === "amex" ? 4 : 3}
+                                        shakeSignal={shakeSignal}
+                                      />
+                                    </div>
+
+                                    <div className="mt-4">
+                                      <Field
+                                        ref={holderNameRef}
+                                        label="Nome Completo"
+                                        placeholder="Maria Silva"
+                                        value={holderName}
+                                        onChange={(v) => {
+                                          setHolderName(v);
+                                          if (holderNameError)
+                                            setHolderNameError(null);
+                                        }}
+                                        onBlur={() => {
+                                          const n = holderName
+                                            .trim()
+                                            .replace(/\s+/g, " ");
+                                          setHolderNameError(
+                                            n.length >= 3
+                                              ? null
+                                              : "Digite o nome completo do titular.",
+                                          );
+                                        }}
+                                        error={holderNameError}
+                                        autoComplete="cc-name"
+                                        name="cc-name"
+                                        shakeSignal={shakeSignal}
+                                      />
+                                    </div>
+
+                                    <div className="mt-4">
+                                      <Select
+                                        label="Pais"
+                                        value={country}
+                                        options={COUNTRIES}
+                                        onChange={(v) =>
+                                          setCountry(v as CountryKey)
+                                        }
+                                        maxMenuWidth={520}
+                                        maxMenuHeight={240}
+                                      />
+                                    </div>
+
+                                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-[0.45fr_1fr]">
+                                      <Field
+                                        ref={zipRef}
+                                        label="Código Postal"
+                                        placeholder={zipPlaceholder(country)}
+                                        value={zip}
+                                        onChange={(v) => {
+                                          setZip(
+                                            normalizeZipForDisplay(country, v),
+                                          );
+                                          if (zipError) setZipError(null);
+                                          setCityLocked(false);
+
+                                          if (isZipComplete(country, v)) {
+                                            window.setTimeout(
+                                              () => addressRef.current?.focus(),
+                                              40,
+                                            );
+                                          }
+                                        }}
+                                        onBlur={handleZipBlur}
+                                        error={zipError}
+                                        insideRight={
+                                          zipLoading ? <SpinnerInInput /> : null
+                                        }
+                                        inputClassName="pr-[20px]"
+                                        inputMode="numeric"
+                                        shakeSignal={shakeSignal}
+                                      />
+                                      <Field
+                                        ref={addressRef}
+                                        label="Endereço de Cobrança"
+                                        placeholder={
+                                          country === "Brasil"
+                                            ? "Rua, número, bairro"
+                                            : "Street address"
+                                        }
+                                        value={address}
+                                        onChange={setAddress}
+                                        autoComplete="street-address"
+                                        name="address"
+                                        shakeSignal={shakeSignal}
+                                      />
+                                    </div>
+
+                                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                                      <Select
+                                        label="Estado / Região"
+                                        value={stateUF}
+                                        options={REGIONS}
+                                        onChange={setStateUF}
+                                        className="md:max-w-[420px]"
+                                        maxMenuWidth={420}
+                                        maxMenuHeight={200}
+                                        right={
+                                          stateAutoHint ? (
+                                            <span className="text-[11px] text-white/35">
+                                              {stateAutoHint}
+                                            </span>
+                                          ) : undefined
+                                        }
+                                      />
+                                      <Field
+                                        label="Cidade"
+                                        placeholder="City"
+                                        value={city}
+                                        onChange={setCity}
+                                        disabled={cityLocked}
+                                        right={
+                                          cityLocked ? (
+                                            <span className="text-[11px] text-white/35">
+                                              Auto
+                                            </span>
+                                          ) : (
+                                            <span className="text-[11px] text-white/35">
+                                              Manual
+                                            </span>
+                                          )
+                                        }
+                                        inputClassName={
+                                          cityLocked ? "cursor-not-allowed" : ""
+                                        }
+                                        autoComplete="address-level2"
+                                        name="city"
+                                        shakeSignal={shakeSignal}
+                                      />
+                                    </div>
+
+                                    <div className="mt-4">
+                                      <Field
+                                        ref={cpfRef}
+                                        label="CPF"
+                                        placeholder="000.000.000-00"
+                                        value={cpf}
+                                        onChange={(v) => {
+                                          setCpf(formatCPF(v));
+                                          if (cardCpfError)
+                                            setCardCpfError(null);
+                                        }}
+                                        onBlur={() =>
+                                          setCardCpfError(validateCpfField(cpf))
+                                        }
+                                        error={cardCpfError}
+                                        inputMode="numeric"
+                                        autoComplete="off"
+                                        name="cpf"
+                                        shakeSignal={shakeSignal}
+                                      />
+                                    </div>
+                                  </motion.div>
+                                )}
+
+                                {method === "pix" && (
+                                  <motion.div
+                                    key="pix"
+                                    initial={
+                                      reduceMotion
+                                        ? { opacity: 0 }
+                                        : { opacity: 0, y: 10 }
+                                    }
+                                    animate={
+                                      reduceMotion
+                                        ? { opacity: 1 }
+                                        : { opacity: 1, y: 0 }
+                                    }
+                                    exit={
+                                      reduceMotion
+                                        ? { opacity: 0 }
+                                        : { opacity: 0, y: 10 }
+                                    }
+                                    transition={
+                                      reduceMotion
+                                        ? { duration: 0.12 }
+                                        : { duration: 0.25, ease: "easeOut" }
+                                    }
+                                    className="mt-6 w-full min-w-0"
+                                  >
+                                    <div className="w-full rounded-2xl border border-white/10 bg-black/25 p-5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
+                                      {showPixSuccess ? (
+                                        <div className="py-3 flex flex-col items-center text-center">
+                                          <motion.div
+                                            initial={{
+                                              opacity: 0,
+                                              y: 10,
+                                              scale: 0.98,
+                                            }}
+                                            animate={{
+                                              opacity: 1,
+                                              y: 0,
+                                              scale: 1,
+                                            }}
+                                            transition={{
+                                              duration: 0.28,
+                                              ease: "easeOut",
+                                            }}
+                                            className="text-[18px] font-semibold text-white"
+                                          >
+                                            Pagamento Aprovado
+                                          </motion.div>
+
+                                          <motion.div
+                                            initial={{
+                                              opacity: 0,
+                                              scale: 0.92,
+                                            }}
+                                            animate={{ opacity: 1, scale: 1 }}
+                                            transition={{
+                                              duration: 0.35,
+                                              ease: "easeOut",
+                                              delay: 0.05,
+                                            }}
+                                            className="mt-6"
+                                          >
+                                            <div className="relative">
+                                              <div className="absolute inset-0 rounded-full bg-emerald-500/12 blur-2xl" />
+                                              <div className="relative rounded-full border border-white/10 bg-white/[0.03] p-5 shadow-[0_18px_55px_rgba(0,0,0,0.55)]">
+                                                <IconCheckCircleGreen className="h-[170px] w-[170px]" />
+                                              </div>
+                                            </div>
+                                          </motion.div>
+
+                                          <div className="mt-4 max-w-[420px] text-[12px] leading-relaxed text-white/55">
+                                            Pagamento confirmado com sucesso.
+                                            Você já pode fechar esta janela.
                                           </div>
-                                          <div className="mt-1 text-[12px] text-white/45">
-                                            Confirme seus dados e pague no app
-                                            do seu banco.
-                                          </div>
 
-                                          <div className="mt-2 text-[11px] text-white/45">
-                                            <span className="text-white/35">
-                                              Email:
-                                            </span>{" "}
-                                            <span className="text-white/30 border-white/10 bg-white/[0.03] p-1 rounded-md">
-  {discordEmail ? discordEmail : "Carregando…"}
-</span>
-                                          </div>
-
-                                          {!!pixErrors.email && (
-                                            <div className="mt-1 text-[11px] text-red-400/90">
-                                              {pixErrors.email}
+                                          {!!liveStatusDetail && (
+                                            <div className="mt-3 max-w-[420px] text-[11px] text-white/40">
+                                              {liveStatusDetail}
                                             </div>
                                           )}
                                         </div>
-
-                                        <div className="flex h-10 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
-                                          <PixImg className="h-5 w-5 opacity-90" />
-                                        </div>
-                                      </div>
-
-                                      {/* STEP 1: form */}
-                                      {pixStep === "form" ? (
-                                        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
-                                          <Field
-                                            ref={pixNameRef}
-                                            label="Nome completo"
-                                            placeholder="Maria Silva"
-                                            value={pixName}
-                                            onChange={(v) => {
-                                              setPixName(v);
-                                              if (pixNameError)
-                                                setPixNameError(null);
+                                      ) : showPixQrFailed ? (
+                                        <div className="py-3 flex flex-col items-center text-center">
+                                          <motion.div
+                                            initial={{
+                                              opacity: 0,
+                                              y: 10,
+                                              scale: 0.98,
                                             }}
-                                            onBlur={() => {
-                                              const n = pixName
-                                                .trim()
-                                                .replace(/\s+/g, " ");
-                                              setPixNameError(
-                                                n.length >= 3
-                                                  ? null
-                                                  : "Digite seu nome completo.",
-                                              );
+                                            animate={{
+                                              opacity: 1,
+                                              y: 0,
+                                              scale: 1,
                                             }}
-                                            error={pixNameError}
-                                            autoComplete="name"
-                                            name="pix-name"
-                                            shakeSignal={shakeSignal}
-                                          />
-
-                                          <Field
-                                            ref={pixCpfRef}
-                                            label="CPF"
-                                            placeholder="000.000.000-00"
-                                            value={pixCpf}
-                                            onChange={(v) => {
-                                              setPixCpf(formatCPF(v));
-                                              if (pixCpfError)
-                                                setPixCpfError(null);
+                                            transition={{
+                                              duration: 0.28,
+                                              ease: "easeOut",
                                             }}
-                                            onBlur={() =>
-                                              setPixCpfError(
-                                                validateCpfField(pixCpf),
-                                              )
-                                            }
-                                            error={pixCpfError}
-                                            inputMode="numeric"
-                                            autoComplete="off"
-                                            name="pix-cpf"
-                                            shakeSignal={shakeSignal}
-                                          />
-                                        </div>
-                                      ) : (
-                                        /* STEP 2: QR */
-                                        <div className="mt-5">
-                                          <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                                            <motion.div
-                                              className="relative aspect-square w-full overflow-hidden rounded-xl border border-white/10"
-                                              initial={{
-                                                scale: 0.99,
-                                                opacity: 0.85,
-                                              }}
-                                              animate={{ scale: 1, opacity: 1 }}
-                                              transition={{
-                                                type: "spring",
-                                                stiffness: reduceMotion
-                                                  ? 160
-                                                  : 520,
-                                                damping: reduceMotion ? 30 : 36,
-                                              }}
-                                            >
-                                              {pixQrBase64 ? (
-                                                <img
-                                                  src={`data:image/png;base64,${pixQrBase64}`}
-                                                  alt="QR Code Pix"
-                                                  className="absolute inset-0 h-full w-full object-cover"
-                                                  draggable={false}
-                                                />
-                                              ) : (
-                                                <div className="absolute inset-0 flex items-center justify-center text-[12px] text-white/50">
-                                                  QR Code indisponível
-                                                </div>
-                                              )}
+                                            className="text-[18px] font-semibold text-white"
+                                          >
+                                            {liveStatus === "expired"
+                                              ? "Pagamento Expirado"
+                                              : liveStatus === "cancelled"
+                                                ? "Pagamento Cancelado"
+                                                : "Pagamento Recusado"}
+                                          </motion.div>
 
-                                              {actionState === "loading" && (
-                                                <div className="absolute inset-0 flex items-center justify-center">
-                                                  <div className="border border-white/10 bg-black/50 px-4 py-2 text-[12px] text-white/80 shadow-[0_18px_55px_rgba(0,0,0,0.55)]">
-                                                    Consultando…
-                                                  </div>
-                                                </div>
-                                              )}
-                                            </motion.div>
-                                          </div>
-
-                                          <div className="mt-3 relative h-[44px] w-full rounded-xl border border-white/10 bg-white/[0.03] shadow-[0_12px_40px_rgba(0,0,0,0.55)]">
-                                            <input
-                                              readOnly
-                                              value={
-                                                pixCode ||
-                                                "Código Pix indisponível"
-                                              }
-                                              className="h-full w-full bg-transparent pl-3 pr-[68px] text-[12px] text-white/85 outline-none"
-                                            />
-
-                                            <div className="absolute right-1 top-1/2 -translate-y-1/2">
-                                              <motion.button
-                                                key={pixCopyPulse}
-                                                type="button"
-                                                onClick={copyPix}
-                                                disabled={!pixCode}
-                                                whileTap={
-                                                  !pixCode
-                                                    ? undefined
-                                                    : { scale: 0.96 }
-                                                }
-                                                initial={{ scale: 1 }}
-                                                animate={
-                                                  pixCopied
-                                                    ? { scale: [1, 1.06, 1] }
-                                                    : { scale: 1 }
-                                                }
-                                                transition={{
-                                                  duration: 0.28,
-                                                  ease: "easeOut",
-                                                }}
-                                                className={`relative h-[36px] w-[44px] overflow-hidden
-                                                    rounded-lg border bg-white/[0.03]
-                                                    inline-flex items-center justify-center transition
-                                                    ${
-                                                      pixCopied
-                                                        ? "border-[#2B67FF]/50 shadow-[0_14px_45px_rgba(43,103,255,0.25)]"
-                                                        : "border-white/10 hover:bg-white/[0.06]"
-                                                    }
-                                                    ${!pixCode ? "opacity-50 cursor-not-allowed" : ""}`}
-                                                aria-label="Copiar código Pix"
-                                              >
-                                                <AnimatePresence>
-                                                  {pixCopied && (
-                                                    <motion.span
-                                                      initial={{
-                                                        opacity: 0.0,
-                                                        scale: 0.55,
-                                                      }}
-                                                      animate={{
-                                                        opacity: 0.35,
-                                                        scale: 1.4,
-                                                      }}
-                                                      exit={{
-                                                        opacity: 0,
-                                                        scale: 1.6,
-                                                      }}
-                                                      transition={{
-                                                        duration: 0.45,
-                                                        ease: "easeOut",
-                                                      }}
-                                                      className="pointer-events-none absolute inset-0 rounded-full bg-[#2B67FF]/30"
-                                                    />
-                                                  )}
-                                                </AnimatePresence>
-
-                                                <IconCopy
-                                                  className={`h-4 w-4 transition ${
-                                                    pixCopied
-                                                      ? "text-[#2B67FF]"
-                                                      : "text-white/70"
+                                          <motion.div
+                                            initial={{
+                                              opacity: 0,
+                                              scale: 0.92,
+                                            }}
+                                            animate={{ opacity: 1, scale: 1 }}
+                                            transition={{
+                                              duration: 0.35,
+                                              ease: "easeOut",
+                                              delay: 0.05,
+                                            }}
+                                            className="mt-6"
+                                          >
+                                            <div className="relative">
+                                              <div
+                                                className={`absolute inset-0 rounded-full blur-2xl ${
+                                                  liveStatus === "expired"
+                                                    ? "bg-amber-500/12"
+                                                    : "bg-red-500/10"
+                                                }`}
+                                              />
+                                              <div className="relative rounded-full border border-white/10 bg-white/[0.03] p-5 shadow-[0_18px_55px_rgba(0,0,0,0.55)]">
+                                                <IconXCircleRed
+                                                  className={`h-[170px] w-[170px] ${
+                                                    liveStatus === "expired"
+                                                      ? "text-amber-400"
+                                                      : "text-red-400"
                                                   }`}
                                                 />
-                                              </motion.button>
+                                              </div>
+                                            </div>
+                                          </motion.div>
 
-                                              <AnimatePresence>
-                                                {pixCopied && (
-                                                  <motion.div
-                                                    initial={{
-                                                      opacity: 0,
-                                                      y: 8,
-                                                      scale: 0.98,
-                                                    }}
-                                                    animate={{
-                                                      opacity: 1,
-                                                      y: 0,
-                                                      scale: 1,
-                                                    }}
-                                                    exit={{
-                                                      opacity: 0,
-                                                      y: 8,
-                                                      scale: 0.98,
-                                                    }}
-                                                    transition={{
-                                                      duration: 0.18,
-                                                      ease: "easeOut",
-                                                    }}
-                                                    className="absolute -top-8.5 -right-2.5 rounded-lg border border-white/10 bg-black/70
-                                                                px-2.5 py-1 text-[11px] text-white/85 shadow-[0_18px_55px_rgba(0,0,0,0.55)] backdrop-blur-xl"
-                                                  >
-                                                    Copiado
-                                                  </motion.div>
-                                                )}
-                                              </AnimatePresence>
+                                          <div className="mt-4 max-w-[380px] text-[12px] leading-relaxed text-white/55">
+                                            {liveStatus === "expired"
+                                              ? "O QR Code expirou. Clique em "
+                                              : liveStatus === "cancelled"
+                                                ? "Este Pix foi cancelado. Clique em "
+                                                : "O pagamento foi recusado. Clique em "}
+                                            <span className="text-white/80 font-semibold">
+                                              Tentar novamente
+                                            </span>{" "}
+                                            para gerar um novo Pix.
+                                          </div>
+
+                                          {!!liveStatusDetail && (
+                                            <div className="mt-3 max-w-[420px] text-[11px] text-white/40">
+                                              {liveStatusDetail}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <>
+                                          <div className="flex items-start justify-between gap-4">
+                                            <div>
+                                              <div className="text-[14px] font-semibold text-white">
+                                                Pagamento via Pix
+                                              </div>
+                                              <div className="mt-1 text-[12px] text-white/45">
+                                                Confirme seus dados e pague no
+                                                app do seu banco.
+                                              </div>
+
+                                              <div className="mt-2 text-[11px] text-white/45">
+                                                <span className="text-white/35">
+                                                  Email:
+                                                </span>{" "}
+                                                <span className="text-white/30 border-white/10 bg-white/[0.03] p-1 rounded-md">
+                                                  {discordEmail
+                                                    ? discordEmail
+                                                    : "Carregando…"}
+                                                </span>
+                                              </div>
+
+                                              {!!pixErrors.email && (
+                                                <div className="mt-1 text-[11px] text-red-400/90">
+                                                  {pixErrors.email}
+                                                </div>
+                                              )}
+                                            </div>
+
+                                            <div className="flex h-10 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
+                                              <PixImg className="h-5 w-5 opacity-90" />
                                             </div>
                                           </div>
-                                        </div>
-                                      )}
-                                    </>
-                                  )}
-                                </div>
-                              </motion.div>
-                            )}
 
-                            {method === "boleto" && (
-                              <motion.div
-                                key="boleto"
-                                initial={
-                                  reduceMotion
-                                    ? { opacity: 0 }
-                                    : { opacity: 0, y: 10 }
-                                }
-                                animate={
-                                  reduceMotion
-                                    ? { opacity: 1 }
-                                    : { opacity: 1, y: 0 }
-                                }
-                                exit={
-                                  reduceMotion
-                                    ? { opacity: 0 }
-                                    : { opacity: 0, y: 10 }
-                                }
-                                transition={
-                                  reduceMotion
-                                    ? { duration: 0.12 }
-                                    : { duration: 0.25, ease: "easeOut" }
-                                }
-                                className="mt-6 w-full min-w-0"
-                              >
-                                <div className="w-full rounded-2xl border border-white/10 bg-black/25 p-5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
-                                  <div className="flex items-start justify-between gap-4">
-                                    <div>
-                                      <div className="text-[14px] font-semibold text-white">
-                                        Pagamento via Boleto
-                                      </div>
-                                      <div className="mt-1 text-[12px] text-white/45">
-                                        Informe seu email para receber o boleto.
-                                        Compensação em até{" "}
-                                        <span className="text-white/70">
-                                          2 dias úteis
-                                        </span>
-                                        .
-                                      </div>
-                                    </div>
-                                    <div className="flex h-10 w-12 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
-  <BoletoImg className="h-[14px] w-[22px] opacity-90" />
-</div>
-                                  </div>
+                                          {pixStep === "form" ? (
+                                            <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+                                              <Field
+                                                ref={pixNameRef}
+                                                label="Nome completo"
+                                                placeholder="Maria Silva"
+                                                value={pixName}
+                                                onChange={(v) => {
+                                                  setPixName(v);
+                                                  if (pixNameError)
+                                                    setPixNameError(null);
+                                                }}
+                                                onBlur={() => {
+                                                  const n = pixName
+                                                    .trim()
+                                                    .replace(/\s+/g, " ");
+                                                  setPixNameError(
+                                                    n.length >= 3
+                                                      ? null
+                                                      : "Digite seu nome completo.",
+                                                  );
+                                                }}
+                                                error={pixNameError}
+                                                autoComplete="name"
+                                                name="pix-name"
+                                                shakeSignal={shakeSignal}
+                                              />
 
-                                  {/* TELA DE CONFIRMAÇÃO (mostra quando já existe boletoPaymentId) */}
-                                  {boletoStep === "generated" ? (
-                                    <>
-                                      <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                                        <div className="flex items-start justify-between gap-3">
-                                          <div>
-                                            <div className="text-[14px] font-semibold text-white/90">
-                                              Confirmação
-                                            </div>
-                                            <div className="mt-1 text-[12px] text-white/45">
-                                              Seu boleto foi gerado e enviado.
-                                              Compensação em até{" "}
-                                              <span className="text-white/70">
-                                                2 dias úteis
-                                              </span>
-                                              .
-                                            </div>
-                                          </div>
-                                         <div className="flex h-9 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
-  <BoletoImg className="h-[13px] w-[20px] opacity-90" />
-</div>
-                                        </div>
-
-                                        {/* Mantive seu bloco de confirmação original, inteiro */}
-                                        <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                                          <div className="text-[12px] font-semibold text-white/85">
-                                            Boleto enviado
-                                            {!!boletoTicketUrl && (
-                                              <button
-                                                type="button"
-                                                onClick={() =>
-                                                  window.open(
-                                                    boletoTicketUrl,
-                                                    "_blank",
-                                                    "noopener,noreferrer",
+                                              <Field
+                                                ref={pixCpfRef}
+                                                label="CPF"
+                                                placeholder="000.000.000-00"
+                                                value={pixCpf}
+                                                onChange={(v) => {
+                                                  setPixCpf(formatCPF(v));
+                                                  if (pixCpfError)
+                                                    setPixCpfError(null);
+                                                }}
+                                                onBlur={() =>
+                                                  setPixCpfError(
+                                                    validateCpfField(pixCpf),
                                                   )
                                                 }
-                                                className="mt-3 w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[12px] font-semibold text-white/80 hover:bg-white/[0.06] transition"
-                                              >
-                                                Abrir boleto
-                                              </button>
-                                            )}
-                                            {!!boletoBarcode && (
-                                              <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                                                <div className="text-[11px] text-white/45">
-                                                  Linha digitável
-                                                </div>
-                                                <div className="mt-1 text-[12px] text-white/85 break-all">
-                                                  {safeText(
-                                                    boletoBarcode,
-                                                    "Linha digitável indisponível",
-                                                  )}
-                                                </div>
-
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    safeClipboardWrite(
-                                                      boletoBarcode,
-                                                    )
-                                                  }
-                                                  className="mt-2 w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[12px] font-semibold text-white/80 hover:bg-white/[0.06] transition"
+                                                error={pixCpfError}
+                                                inputMode="numeric"
+                                                autoComplete="off"
+                                                name="pix-cpf"
+                                                shakeSignal={shakeSignal}
+                                              />
+                                            </div>
+                                          ) : (
+                                            <div className="mt-5">
+                                              <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                                                <motion.div
+                                                  className="relative aspect-square w-full overflow-hidden rounded-xl border border-white/10"
+                                                  initial={{
+                                                    scale: 0.99,
+                                                    opacity: 0.85,
+                                                  }}
+                                                  animate={{
+                                                    scale: 1,
+                                                    opacity: 1,
+                                                  }}
+                                                  transition={{
+                                                    type: "spring",
+                                                    stiffness: reduceMotion
+                                                      ? 160
+                                                      : 520,
+                                                    damping: reduceMotion
+                                                      ? 30
+                                                      : 36,
+                                                  }}
                                                 >
-                                                  Copiar linha digitável
-                                                </button>
+                                                  {pixQrBase64 ? (
+                                                    <img
+                                                      src={`data:image/png;base64,${pixQrBase64}`}
+                                                      alt="QR Code Pix"
+                                                      className="absolute inset-0 h-full w-full object-cover"
+                                                      draggable={false}
+                                                    />
+                                                  ) : (
+                                                    <div className="absolute inset-0 flex items-center justify-center text-[12px] text-white/50">
+                                                      QR Code indisponível
+                                                    </div>
+                                                  )}
+
+                                                  {actionState ===
+                                                    "loading" && (
+                                                    <div className="absolute inset-0 flex items-center justify-center">
+                                                      <div className="border border-white/10 bg-black/50 px-4 py-2 text-[12px] text-white/80 shadow-[0_18px_55px_rgba(0,0,0,0.55)]">
+                                                        Consultando…
+                                                      </div>
+                                                    </div>
+                                                  )}
+                                                </motion.div>
                                               </div>
-                                            )}
-                                          </div>
 
+                                              <div className="mt-3 relative h-[44px] w-full rounded-xl border border-white/10 bg-white/[0.03] shadow-[0_12px_40px_rgba(0,0,0,0.55)]">
+                                                <input
+                                                  readOnly
+                                                  value={
+                                                    pixCode ||
+                                                    "Código Pix indisponível"
+                                                  }
+                                                  className="h-full w-full bg-transparent pl-3 pr-[68px] text-[12px] text-white/85 outline-none"
+                                                />
+
+                                                <div className="absolute right-1 top-1/2 -translate-y-1/2">
+                                                  <motion.button
+                                                    key={pixCopyPulse}
+                                                    type="button"
+                                                    onClick={copyPix}
+                                                    disabled={!pixCode}
+                                                    whileTap={
+                                                      !pixCode
+                                                        ? undefined
+                                                        : { scale: 0.96 }
+                                                    }
+                                                    initial={{ scale: 1 }}
+                                                    animate={
+                                                      pixCopied
+                                                        ? {
+                                                            scale: [1, 1.06, 1],
+                                                          }
+                                                        : { scale: 1 }
+                                                    }
+                                                    transition={{
+                                                      duration: 0.28,
+                                                      ease: "easeOut",
+                                                    }}
+                                                    className={`relative h-[36px] w-[44px] overflow-hidden
+                            rounded-lg border bg-white/[0.03]
+                            inline-flex items-center justify-center transition
+                            ${
+                              pixCopied
+                                ? "border-[#2B67FF]/50 shadow-[0_14px_45px_rgba(43,103,255,0.25)]"
+                                : "border-white/10 hover:bg-white/[0.06]"
+                            }
+                            ${!pixCode ? "opacity-50 cursor-not-allowed" : ""}`}
+                                                    aria-label="Copiar código Pix"
+                                                  >
+                                                    <AnimatePresence>
+                                                      {pixCopied && (
+                                                        <motion.span
+                                                          initial={{
+                                                            opacity: 0.0,
+                                                            scale: 0.55,
+                                                          }}
+                                                          animate={{
+                                                            opacity: 0.35,
+                                                            scale: 1.4,
+                                                          }}
+                                                          exit={{
+                                                            opacity: 0,
+                                                            scale: 1.6,
+                                                          }}
+                                                          transition={{
+                                                            duration: 0.45,
+                                                            ease: "easeOut",
+                                                          }}
+                                                          className="pointer-events-none absolute inset-0 rounded-full bg-[#2B67FF]/30"
+                                                        />
+                                                      )}
+                                                    </AnimatePresence>
+
+                                                    <IconCopy
+                                                      className={`h-4 w-4 transition ${
+                                                        pixCopied
+                                                          ? "text-[#2B67FF]"
+                                                          : "text-white/70"
+                                                      }`}
+                                                    />
+                                                  </motion.button>
+
+                                                  <AnimatePresence>
+                                                    {pixCopied && (
+                                                      <motion.div
+                                                        initial={{
+                                                          opacity: 0,
+                                                          y: 8,
+                                                          scale: 0.98,
+                                                        }}
+                                                        animate={{
+                                                          opacity: 1,
+                                                          y: 0,
+                                                          scale: 1,
+                                                        }}
+                                                        exit={{
+                                                          opacity: 0,
+                                                          y: 8,
+                                                          scale: 0.98,
+                                                        }}
+                                                        transition={{
+                                                          duration: 0.18,
+                                                          ease: "easeOut",
+                                                        }}
+                                                        className="absolute -top-8.5 -right-2.5 rounded-lg border border-white/10 bg-black/70
+                                px-2.5 py-1 text-[11px] text-white/85 shadow-[0_18px_55px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+                                                      >
+                                                        Copiado
+                                                      </motion.div>
+                                                    )}
+                                                  </AnimatePresence>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          )}
+                                        </>
+                                      )}
+                                    </div>
+                                  </motion.div>
+                                )}
+
+                                {method === "boleto" && (
+                                  <motion.div
+                                    key="boleto"
+                                    initial={
+                                      reduceMotion
+                                        ? { opacity: 0 }
+                                        : { opacity: 0, y: 10 }
+                                    }
+                                    animate={
+                                      reduceMotion
+                                        ? { opacity: 1 }
+                                        : { opacity: 1, y: 0 }
+                                    }
+                                    exit={
+                                      reduceMotion
+                                        ? { opacity: 0 }
+                                        : { opacity: 0, y: 10 }
+                                    }
+                                    transition={
+                                      reduceMotion
+                                        ? { duration: 0.12 }
+                                        : { duration: 0.25, ease: "easeOut" }
+                                    }
+                                    className="mt-6 w-full min-w-0"
+                                  >
+                                    <div className="w-full rounded-2xl border border-white/10 bg-black/25 p-5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
+                                      <div className="flex items-start justify-between gap-4">
+                                        <div>
+                                          <div className="text-[14px] font-semibold text-white">
+                                            Pagamento via Boleto
+                                          </div>
                                           <div className="mt-1 text-[12px] text-white/45">
-                                            Enviamos para:{" "}
-                                            <span className="text-white/80">
-                                              {boletoSentToEmail || boletoEmail}
+                                            Informe seu email para receber o
+                                            boleto. Compensação em até{" "}
+                                            <span className="text-white/70">
+                                              2 dias úteis
                                             </span>
+                                            .
                                           </div>
-
-                                          <div className="mt-2 text-[11px] text-white/45">
-                                            <span className="text-white/35">
-                                              ID:
-                                            </span>{" "}
-                                            <span className="text-white/80">
-                                              {boletoPaymentId}
-                                            </span>
-                                          </div>
-
-                                          <div className="mt-2 text-[11px] text-white/35">
-                                            Dica: confira a caixa de spam e
-                                            promoções.
-                                          </div>
+                                        </div>
+                                        <div className="flex h-10 w-12 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
+                                          <BoletoImg className="h-[14px] w-[22px] opacity-90" />
                                         </div>
                                       </div>
 
-                                      <div className="mt-4 text-[11px] text-white/40">
-                                        Ao enviar o boleto, você confirma o
-                                        email informado.
-                                      </div>
-                                    </>
-                                  ) : (
-                                    <>
-                                      {/* FORMULÁRIO (fica igual, só aparece antes de gerar o boleto) */}
-                                      <div className="mt-5">
-                                        <Field
-                                          ref={boletoEmailRef}
-                                          label="Email para receber o boleto"
-                                          placeholder="seuemail@exemplo.com"
-                                          value={
-                                            boletoSentToEmail || boletoEmail
-                                          }
-                                          onChange={(v) => {
-                                            setBoletoEmail(v);
-                                            if (boletoErrors.email)
-                                              setBoletoErrors((s) => ({
-                                                ...s,
-                                                email: null,
-                                              }));
-                                          }}
-                                          onBlur={() =>
-                                            setBoletoErrors((s) => ({
-                                              ...s,
-                                              email:
-                                                validateEmailField(boletoEmail),
-                                            }))
-                                          }
-                                          error={boletoErrors.email || null}
-                                          type="email"
-                                          autoComplete="email"
-                                          name="boleto-email"
-                                          shakeSignal={shakeSignal}
-                                        />
-                                      </div>
+                                      {/* TELA DE CONFIRMAÇÃO (mostra quando já existe boletoPaymentId) */}
+                                      {boletoStep === "generated" ? (
+                                        <>
+                                          <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                                            <div className="flex items-start justify-between gap-3">
+                                              <div>
+                                                <div className="text-[14px] font-semibold text-white/90">
+                                                  Confirmação
+                                                </div>
+                                                <div className="mt-1 text-[12px] text-white/45">
+                                                  Seu boleto foi gerado e
+                                                  enviado. Compensação em até{" "}
+                                                  <span className="text-white/70">
+                                                    2 dias úteis
+                                                  </span>
+                                                  .
+                                                </div>
+                                              </div>
+                                              <div className="flex h-9 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
+                                                <BoletoImg className="h-[13px] w-[20px] opacity-90" />
+                                              </div>
+                                            </div>
 
-                                      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                                        <Field
-                                          ref={boletoNameRef}
-                                          label="Nome completo"
-                                          placeholder="Maria Silva"
-                                          value={boletoName}
-                                          onChange={(v) => {
-                                            setBoletoName(v);
-                                            if (boletoErrors.name)
-                                              setBoletoErrors((s) => ({
-                                                ...s,
-                                                name: null,
-                                              }));
-                                          }}
-                                          onBlur={() => {
-                                            const n = boletoName
-                                              .trim()
-                                              .replace(/\s+/g, " ");
-                                            setBoletoErrors((s) => ({
-                                              ...s,
-                                              name:
-                                                n.length >= 3
-                                                  ? null
-                                                  : "Digite seu nome completo.",
-                                            }));
-                                          }}
-                                          error={boletoErrors.name || null}
-                                          autoComplete="name"
-                                          name="boleto-name"
-                                          shakeSignal={shakeSignal}
-                                        />
+                                            {/* Mantive seu bloco de confirmação original, inteiro */}
+                                            <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                                              <div className="text-[12px] font-semibold text-white/85">
+                                                Boleto enviado
+                                                {!!boletoTicketUrl && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                      window.open(
+                                                        boletoTicketUrl,
+                                                        "_blank",
+                                                        "noopener,noreferrer",
+                                                      )
+                                                    }
+                                                    className="mt-3 w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[12px] font-semibold text-white/80 hover:bg-white/[0.06] transition"
+                                                  >
+                                                    Abrir boleto
+                                                  </button>
+                                                )}
+                                                {!!boletoBarcode && (
+                                                  <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                                                    <div className="text-[11px] text-white/45">
+                                                      Linha digitável
+                                                    </div>
+                                                    <div className="mt-1 text-[12px] text-white/85 break-all">
+                                                      {safeText(
+                                                        boletoBarcode,
+                                                        "Linha digitável indisponível",
+                                                      )}
+                                                    </div>
 
-                                        <Field
-                                          ref={boletoCpfRef}
-                                          label="CPF"
-                                          placeholder="000.000.000-00"
-                                          value={boletoCpf}
-                                          onChange={(v) => {
-                                            setBoletoCpf(formatCPF(v));
-                                            if (boletoErrors.cpf)
-                                              setBoletoErrors((s) => ({
-                                                ...s,
-                                                cpf: null,
-                                              }));
-                                          }}
-                                          onBlur={() =>
-                                            setBoletoErrors((s) => ({
-                                              ...s,
-                                              cpf: validateCpfField(boletoCpf),
-                                            }))
-                                          }
-                                          error={boletoErrors.cpf || null}
-                                          inputMode="numeric"
-                                          autoComplete="off"
-                                          name="boleto-cpf"
-                                          shakeSignal={shakeSignal}
-                                        />
-                                      </div>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() =>
+                                                        safeClipboardWrite(
+                                                          boletoBarcode,
+                                                        )
+                                                      }
+                                                      className="mt-2 w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[12px] font-semibold text-white/80 hover:bg-white/[0.06] transition"
+                                                    >
+                                                      Copiar linha digitável
+                                                    </button>
+                                                  </div>
+                                                )}
+                                              </div>
 
-                                      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                                        <Field
-                                          label="CEP"
-                                          placeholder="00000-000"
-                                          value={boletoZip}
-                                          onChange={(v) => {
-                                            setBoletoZip(formatCEP(v));
-                                            if (boletoErrors.zip)
-                                              setBoletoErrors((s) => ({
-                                                ...s,
-                                                zip: null,
-                                              }));
-                                          }}
-                                          onBlur={() =>
-                                            lookupBoletoCep(boletoZip)
-                                          }
-                                          error={boletoErrors.zip || null}
-                                          insideRight={
-                                            boletoCepLoading ? (
-                                              <SpinnerInInput />
-                                            ) : null
-                                          }
-                                          inputMode="numeric"
-                                          name="boleto-cep"
-                                          shakeSignal={shakeSignal}
-                                        />
+                                              <div className="mt-1 text-[12px] text-white/45">
+                                                Enviamos para:{" "}
+                                                <span className="text-white/80">
+                                                  {boletoSentToEmail ||
+                                                    boletoEmail}
+                                                </span>
+                                              </div>
 
-                                        <Field
-                                          label="Rua"
-                                          placeholder="Rua Exemplo"
-                                          value={boletoStreetName}
-                                          onChange={(v) => {
-                                            setBoletoStreetName(v);
-                                            if (boletoErrors.street_name)
-                                              setBoletoErrors((s) => ({
-                                                ...s,
-                                                street_name: null,
-                                              }));
-                                          }}
-                                          onBlur={() => {
-                                            setBoletoErrors((s) => ({
-                                              ...s,
-                                              street_name:
-                                                boletoStreetName.trim()
-                                                  .length >= 2
-                                                  ? null
-                                                  : "Rua obrigatória.",
-                                            }));
-                                          }}
-                                          error={
-                                            boletoErrors.street_name || null
-                                          }
-                                          name="boleto-street"
-                                          shakeSignal={shakeSignal}
-                                        />
-                                      </div>
+                                              <div className="mt-2 text-[11px] text-white/45">
+                                                <span className="text-white/35">
+                                                  ID:
+                                                </span>{" "}
+                                                <span className="text-white/80">
+                                                  {boletoPaymentId}
+                                                </span>
+                                              </div>
 
-                                      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                                        <Field
-                                          label="Número"
-                                          placeholder="123"
-                                          value={boletoStreetNumber}
-                                          onChange={(v) => {
-                                            setBoletoStreetNumber(v);
-                                            if (boletoErrors.street_number)
-                                              setBoletoErrors((s) => ({
-                                                ...s,
-                                                street_number: null,
-                                              }));
-                                          }}
-                                          onBlur={() => {
-                                            setBoletoErrors((s) => ({
-                                              ...s,
-                                              street_number:
-                                                boletoStreetNumber.trim().length
-                                                  ? null
-                                                  : "Número obrigatório.",
-                                            }));
-                                          }}
-                                          error={
-                                            boletoErrors.street_number || null
-                                          }
-                                          name="boleto-number"
-                                          shakeSignal={shakeSignal}
-                                        />
+                                              <div className="mt-2 text-[11px] text-white/35">
+                                                Dica: confira a caixa de spam e
+                                                promoções.
+                                              </div>
+                                            </div>
+                                          </div>
 
-                                        <Field
-                                          label="Bairro"
-                                          placeholder="Centro"
-                                          value={boletoNeighborhood}
-                                          onChange={(v) => {
-                                            setBoletoNeighborhood(v);
-                                            if (boletoErrors.neighborhood)
-                                              setBoletoErrors((s) => ({
-                                                ...s,
-                                                neighborhood: null,
-                                              }));
-                                          }}
-                                          onBlur={() => {
-                                            setBoletoErrors((s) => ({
-                                              ...s,
-                                              neighborhood:
-                                                boletoNeighborhood.trim()
-                                                  .length >= 2
-                                                  ? null
-                                                  : "Bairro obrigatório.",
-                                            }));
-                                          }}
-                                          error={
-                                            boletoErrors.neighborhood || null
-                                          }
-                                          name="boleto-neighborhood"
-                                          shakeSignal={shakeSignal}
-                                        />
-                                      </div>
+                                          <div className="mt-4 text-[11px] text-white/40">
+                                            Ao enviar o boleto, você confirma o
+                                            email informado.
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <>
+                                          {/* FORMULÁRIO (fica igual, só aparece antes de gerar o boleto) */}
+                                          <div className="mt-5">
+                                            <Field
+                                              ref={boletoEmailRef}
+                                              label="Email para receber o boleto"
+                                              placeholder="seuemail@exemplo.com"
+                                              value={
+                                                boletoSentToEmail || boletoEmail
+                                              }
+                                              onChange={(v) => {
+                                                setBoletoEmail(v);
+                                                if (boletoErrors.email)
+                                                  setBoletoErrors((s) => ({
+                                                    ...s,
+                                                    email: null,
+                                                  }));
+                                              }}
+                                              onBlur={() =>
+                                                setBoletoErrors((s) => ({
+                                                  ...s,
+                                                  email:
+                                                    validateEmailField(
+                                                      boletoEmail,
+                                                    ),
+                                                }))
+                                              }
+                                              error={boletoErrors.email || null}
+                                              type="email"
+                                              autoComplete="email"
+                                              name="boleto-email"
+                                              shakeSignal={shakeSignal}
+                                            />
+                                          </div>
 
-                                      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                                        <Field
-                                          label="Cidade"
-                                          placeholder="São Paulo"
-                                          value={boletoCity}
-                                          onChange={(v) => {
-                                            setBoletoCity(v);
-                                            if (boletoErrors.city)
-                                              setBoletoErrors((s) => ({
-                                                ...s,
-                                                city: null,
-                                              }));
-                                          }}
-                                          onBlur={() => {
-                                            setBoletoErrors((s) => ({
-                                              ...s,
-                                              city:
-                                                boletoCity.trim().length >= 2
-                                                  ? null
-                                                  : "Cidade obrigatória.",
-                                            }));
-                                          }}
-                                          error={boletoErrors.city || null}
-                                          name="boleto-city"
-                                          shakeSignal={shakeSignal}
-                                        />
+                                          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                                            <Field
+                                              ref={boletoNameRef}
+                                              label="Nome completo"
+                                              placeholder="Maria Silva"
+                                              value={boletoName}
+                                              onChange={(v) => {
+                                                setBoletoName(v);
+                                                if (boletoErrors.name)
+                                                  setBoletoErrors((s) => ({
+                                                    ...s,
+                                                    name: null,
+                                                  }));
+                                              }}
+                                              onBlur={() => {
+                                                const n = boletoName
+                                                  .trim()
+                                                  .replace(/\s+/g, " ");
+                                                setBoletoErrors((s) => ({
+                                                  ...s,
+                                                  name:
+                                                    n.length >= 3
+                                                      ? null
+                                                      : "Digite seu nome completo.",
+                                                }));
+                                              }}
+                                              error={boletoErrors.name || null}
+                                              autoComplete="name"
+                                              name="boleto-name"
+                                              shakeSignal={shakeSignal}
+                                            />
 
-                                        <Select
-                                          label="UF"
-                                          value={boletoUF}
-                                          options={UF_CODES}
-                                          onChange={(v) => {
-                                            setBoletoUF(v);
-                                            if (boletoErrors.federal_unit)
-                                              setBoletoErrors((s) => ({
-                                                ...s,
-                                                federal_unit: null,
-                                              }));
-                                          }}
-                                          maxMenuWidth={220}
-                                          maxMenuHeight={240}
-                                        />
-                                      </div>
+                                            <Field
+                                              ref={boletoCpfRef}
+                                              label="CPF"
+                                              placeholder="000.000.000-00"
+                                              value={boletoCpf}
+                                              onChange={(v) => {
+                                                setBoletoCpf(formatCPF(v));
+                                                if (boletoErrors.cpf)
+                                                  setBoletoErrors((s) => ({
+                                                    ...s,
+                                                    cpf: null,
+                                                  }));
+                                              }}
+                                              onBlur={() =>
+                                                setBoletoErrors((s) => ({
+                                                  ...s,
+                                                  cpf: validateCpfField(
+                                                    boletoCpf,
+                                                  ),
+                                                }))
+                                              }
+                                              error={boletoErrors.cpf || null}
+                                              inputMode="numeric"
+                                              autoComplete="off"
+                                              name="boleto-cpf"
+                                              shakeSignal={shakeSignal}
+                                            />
+                                          </div>
 
-                                      <div className="mt-4 text-[11px] text-white/40">
-                                        Ao enviar o boleto, você confirma o
-                                        email informado.
-                                      </div>
-                                    </>
-                                  )}
-                                </div>
-                              </motion.div>
+                                          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                                            <Field
+                                              label="CEP"
+                                              placeholder="00000-000"
+                                              value={boletoZip}
+                                              onChange={(v) => {
+                                                setBoletoZip(formatCEP(v));
+                                                if (boletoErrors.zip)
+                                                  setBoletoErrors((s) => ({
+                                                    ...s,
+                                                    zip: null,
+                                                  }));
+                                              }}
+                                              onBlur={() =>
+                                                lookupBoletoCep(boletoZip)
+                                              }
+                                              error={boletoErrors.zip || null}
+                                              insideRight={
+                                                boletoCepLoading ? (
+                                                  <SpinnerInInput />
+                                                ) : null
+                                              }
+                                              inputMode="numeric"
+                                              name="boleto-cep"
+                                              shakeSignal={shakeSignal}
+                                            />
+
+                                            <Field
+                                              label="Rua"
+                                              placeholder="Rua Exemplo"
+                                              value={boletoStreetName}
+                                              onChange={(v) => {
+                                                setBoletoStreetName(v);
+                                                if (boletoErrors.street_name)
+                                                  setBoletoErrors((s) => ({
+                                                    ...s,
+                                                    street_name: null,
+                                                  }));
+                                              }}
+                                              onBlur={() => {
+                                                setBoletoErrors((s) => ({
+                                                  ...s,
+                                                  street_name:
+                                                    boletoStreetName.trim()
+                                                      .length >= 2
+                                                      ? null
+                                                      : "Rua obrigatória.",
+                                                }));
+                                              }}
+                                              error={
+                                                boletoErrors.street_name || null
+                                              }
+                                              name="boleto-street"
+                                              shakeSignal={shakeSignal}
+                                            />
+                                          </div>
+
+                                          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                                            <Field
+                                              label="Número"
+                                              placeholder="123"
+                                              value={boletoStreetNumber}
+                                              onChange={(v) => {
+                                                setBoletoStreetNumber(v);
+                                                if (boletoErrors.street_number)
+                                                  setBoletoErrors((s) => ({
+                                                    ...s,
+                                                    street_number: null,
+                                                  }));
+                                              }}
+                                              onBlur={() => {
+                                                setBoletoErrors((s) => ({
+                                                  ...s,
+                                                  street_number:
+                                                    boletoStreetNumber.trim()
+                                                      .length
+                                                      ? null
+                                                      : "Número obrigatório.",
+                                                }));
+                                              }}
+                                              error={
+                                                boletoErrors.street_number ||
+                                                null
+                                              }
+                                              name="boleto-number"
+                                              shakeSignal={shakeSignal}
+                                            />
+
+                                            <Field
+                                              label="Bairro"
+                                              placeholder="Centro"
+                                              value={boletoNeighborhood}
+                                              onChange={(v) => {
+                                                setBoletoNeighborhood(v);
+                                                if (boletoErrors.neighborhood)
+                                                  setBoletoErrors((s) => ({
+                                                    ...s,
+                                                    neighborhood: null,
+                                                  }));
+                                              }}
+                                              onBlur={() => {
+                                                setBoletoErrors((s) => ({
+                                                  ...s,
+                                                  neighborhood:
+                                                    boletoNeighborhood.trim()
+                                                      .length >= 2
+                                                      ? null
+                                                      : "Bairro obrigatório.",
+                                                }));
+                                              }}
+                                              error={
+                                                boletoErrors.neighborhood ||
+                                                null
+                                              }
+                                              name="boleto-neighborhood"
+                                              shakeSignal={shakeSignal}
+                                            />
+                                          </div>
+
+                                          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                                            <Field
+                                              label="Cidade"
+                                              placeholder="São Paulo"
+                                              value={boletoCity}
+                                              onChange={(v) => {
+                                                setBoletoCity(v);
+                                                if (boletoErrors.city)
+                                                  setBoletoErrors((s) => ({
+                                                    ...s,
+                                                    city: null,
+                                                  }));
+                                              }}
+                                              onBlur={() => {
+                                                setBoletoErrors((s) => ({
+                                                  ...s,
+                                                  city:
+                                                    boletoCity.trim().length >=
+                                                    2
+                                                      ? null
+                                                      : "Cidade obrigatória.",
+                                                }));
+                                              }}
+                                              error={boletoErrors.city || null}
+                                              name="boleto-city"
+                                              shakeSignal={shakeSignal}
+                                            />
+
+                                            <Select
+                                              label="UF"
+                                              value={boletoUF}
+                                              options={UF_CODES}
+                                              onChange={(v) => {
+                                                setBoletoUF(v);
+                                                if (boletoErrors.federal_unit)
+                                                  setBoletoErrors((s) => ({
+                                                    ...s,
+                                                    federal_unit: null,
+                                                  }));
+                                              }}
+                                              maxMenuWidth={220}
+                                              maxMenuHeight={240}
+                                            />
+                                          </div>
+
+                                          <div className="mt-4 text-[11px] text-white/40">
+                                            Ao enviar o boleto, você confirma o
+                                            email informado.
+                                          </div>
+                                        </>
+                                      )}
+                                    </div>
+                                  </motion.div>
+                                )}
+                              </div>
                             )}
                           </AnimatePresence>
                         </div>
@@ -4752,17 +5484,17 @@ if (pixStep === "qr") {
                             primaryBtnDisabled ? undefined : { scale: 0.985 }
                           }
                           onClick={handlePrimaryAction}
-                          disabled={primaryBtnDisabled}
+                          disabled={primaryBtnDisabledResolved}
                           className={`mt-5 w-full rounded-xl py-3.5 text-[13px] font-semibold 
                                    bg-gradient-to-b from-[#2B67FF] to-[#214FC4]
                                    text-white shadow-[0_18px_60px_rgba(33,79,196,0.35)]
                                    hover:brightness-110 transition
                                    relative flex items-center justify-center
-                                   ${primaryBtnDisabled ? "opacity-70 cursor-not-allowed" : ""}`}
+                                   ${primaryBtnDisabledResolved ? "opacity-70 cursor-not-allowed" : ""}`}
                         >
                           <span className="pointer-events-none inline-flex items-center gap-2">
                             {actionState === "loading" && <SpinnerMini />}
-                            {primaryBtnLabel}
+                            {primaryBtnLabelResolved}
                           </span>
 
                           <span className="absolute right-4 top-1/2 -translate-y-1/2 text-white/85">

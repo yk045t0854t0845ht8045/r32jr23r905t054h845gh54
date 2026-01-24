@@ -17,7 +17,9 @@ function normalizeOrigin(input: string) {
 function getRequestOrigin(req: NextRequest) {
   const protoRaw = (req.headers.get("x-forwarded-proto") || "").trim();
   const hostRaw =
-    (req.headers.get("x-forwarded-host") || req.headers.get("host") || "").trim();
+    (req.headers.get("x-forwarded-host") ||
+      req.headers.get("host") ||
+      "").trim();
 
   const proto = (protoRaw.split(",")[0] || "").trim() || "https";
   const host = (hostRaw.split(",")[0] || "").trim();
@@ -27,13 +29,31 @@ function getRequestOrigin(req: NextRequest) {
   return `${proto}://${host}`;
 }
 
+function appendVary(h: Headers, value: string) {
+  const cur = (h.get("Vary") || "").trim();
+  if (!cur) {
+    h.set("Vary", value);
+    return;
+  }
+  const parts = cur
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const set = new Set(parts.map((p) => p.toLowerCase()));
+  if (!set.has(value.toLowerCase())) {
+    parts.push(value);
+    h.set("Vary", parts.join(", "));
+  }
+}
+
 function pickAllowedOrigin(req: NextRequest) {
   const originHdr = (req.headers.get("origin") || "").trim();
   const reqOrigin = getRequestOrigin(req);
 
   const origin = originHdr ? normalizeOrigin(originHdr) : null;
 
-  // allowlist: APP_ORIGIN, ALLOWED_ORIGINS e o próprio host do request (evita 403 quando APP_ORIGIN está “diferente”)
+  // allowlist: APP_ORIGIN, ALLOWED_ORIGINS e o próprio host do request
   const allow = new Set<string>(
     [APP_ORIGIN, reqOrigin, ...ALLOWED_ORIGINS].filter(Boolean) as string[],
   );
@@ -44,7 +64,7 @@ function pickAllowedOrigin(req: NextRequest) {
   // Se tem Origin e bate com o host real -> ecoa (mesmo se APP_ORIGIN estiver errado)
   if (origin && reqOrigin && origin === reqOrigin) return origin;
 
-  // Se não tem Origin (SSR/server-to-server), não seta Allow-Origin (não precisa)
+  // Se não tem Origin (SSR/server-to-server), não seta Allow-Origin
   return null;
 }
 
@@ -54,15 +74,30 @@ function buildCorsHeaders(req: NextRequest) {
   const allowed = pickAllowedOrigin(req);
   if (allowed) {
     h.set("Access-Control-Allow-Origin", allowed);
-    h.set("Vary", "Origin");
+    appendVary(h, "Origin");
     h.set("Access-Control-Allow-Credentials", "true");
   }
 
-  h.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  h.set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   h.set(
     "Access-Control-Allow-Headers",
-    "Content-Type, Accept, Authorization, X-Idempotency-Key",
+    [
+      "Content-Type",
+      "Accept",
+      "Authorization",
+      "X-Idempotency-Key",
+      "X-Requested-With",
+      "X-CSRF-Token",
+      "X-Client-Info",
+    ].join(", "),
   );
+
+  // útil pra debug / clients
+  h.set(
+    "Access-Control-Expose-Headers",
+    ["Content-Type", "Cache-Control", "X-Request-Id"].join(", "),
+  );
+
   h.set("Access-Control-Max-Age", "86400");
 
   // hardening básico

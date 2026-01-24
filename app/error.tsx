@@ -13,16 +13,16 @@ export default function Error({ error, reset }: { error: Error & { digest?: stri
       <div className="flex gap-2">
         <button
           onClick={() => reset()}
-          className="rounded-xl bg-black px-4 py-2 text-sm text-white hover:opacity-90"
+          className="bg-black px-6 py-3 text-sm text-white/70 hover:opacity-90"
         >
           Tentar novamente
         </button>
-        <button
+        {/* <button
           onClick={() => (window.location.href = "/")}
-          className="rounded-xl border border-neutral-200 px-4 py-2 text-sm hover:bg-neutral-50"
+          className="rounded-xl border border-neutral-200/10 px-4 py-2 text-sm hover:bg-neutral-50"
         >
           Ir para início
-        </button>
+        </button> */}
       </div>
     </div>
   );

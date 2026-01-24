@@ -1505,8 +1505,16 @@ export default function Pay({
   const [uiGate, setUiGate] = useState<"idle" | "loading" | "ready">("idle");
   const uiGateTimerRef = useRef<number | null>(null);
 
-  const [zipLoading, setZipLoading] = useState(false);
   const [zipError, setZipError] = useState<string | null>(null);
+const [addressError, setAddressError] = useState<string | null>(null);
+const [cityError, setCityError] = useState<string | null>(null);
+
+// se você já tem zipRef e addressRef, ok. Se não tiver:
+const zipRef = useRef<HTMLInputElement | null>(null);
+const addressRef = useRef<HTMLInputElement | null>(null);
+const cityRef = useRef<HTMLInputElement | null>(null);
+
+  const [zipLoading, setZipLoading] = useState(false);
   const [cityLocked, setCityLocked] = useState(false);
   const [stateAutoHint, setStateAutoHint] = useState<string | null>(null);
   const zipAbortRef = useRef<AbortController | null>(null);
@@ -1768,8 +1776,6 @@ setLiveStatus(null);
   const expRef = useRef<HTMLInputElement | null>(null);
   const cvcRef = useRef<HTMLInputElement | null>(null);
   const holderNameRef = useRef<HTMLInputElement | null>(null);
-  const zipRef = useRef<HTMLInputElement | null>(null);
-  const addressRef = useRef<HTMLInputElement | null>(null);
   const cpfRef = useRef<HTMLInputElement | null>(null);
 
   const boletoNameRef = useRef<HTMLInputElement | null>(null);
@@ -2900,34 +2906,64 @@ const primaryBtnDisabled =
     return ok;
   }
 
-  function validateCardForm() {
-    const eErr = validateEmailField(email);
-    setEmailError(eErr);
+ function validateCardForm() {
+  const eErr = validateEmailField(email);
+  setEmailError(eErr);
 
-    const cErr = validateCpfField(cpf);
-    setCardCpfError(cErr);
+  const cErr = validateCpfField(cpf);
+  setCardCpfError(cErr);
 
-    const nameErr =
-      holderName.trim().replace(/\s+/g, " ").length >= 3
-        ? null
-        : "Digite o nome completo do titular.";
-    setHolderNameError(nameErr);
+  const nameErr =
+    holderName.trim().replace(/\s+/g, " ").length >= 3
+      ? null
+      : "Digite o nome completo do titular.";
+  setHolderNameError(nameErr);
 
-    const { next, ok: cardsOk } = computeCardErrorsSnapshot();
-    setCardErrors(next);
+  // ✅ NOVO: obrigatórios no Card
+  const z = onlyDigits(zip);
+  const zipErrLocal = isZipComplete(country, zip)
+    ? null
+    : country === "Brasil"
+      ? "CEP inválido."
+      : "Código postal inválido.";
+  setZipError(zipErrLocal);
 
-    if (eErr || cErr || nameErr || !cardsOk) {
-      if (eErr) emailRef.current?.focus();
-      else if (next.cardNumber) cardNumberRef.current?.focus();
-      else if (next.exp) expRef.current?.focus();
-      else if (next.cvc) cvcRef.current?.focus();
-      else if (nameErr) holderNameRef.current?.focus();
-      else if (cErr) cpfRef.current?.focus();
-      return false;
-    }
+  const addr = address.trim().replace(/\s+/g, " ");
+  const addressErrLocal =
+    addr.length >= 3 ? null : "Endereço de cobrança obrigatório.";
+  setAddressError(addressErrLocal);
 
-    return true;
+  const cty = city.trim().replace(/\s+/g, " ");
+  const cityErrLocal = cty.length >= 2 ? null : "Cidade obrigatória.";
+  setCityError(cityErrLocal);
+
+  const { next, ok: cardsOk } = computeCardErrorsSnapshot();
+  setCardErrors(next);
+
+  // ✅ inclui os 3 novos no gate
+  if (
+    eErr ||
+    cErr ||
+    nameErr ||
+    !cardsOk ||
+    zipErrLocal ||
+    addressErrLocal ||
+    cityErrLocal
+  ) {
+    if (eErr) emailRef.current?.focus();
+    else if (next.cardNumber) cardNumberRef.current?.focus();
+    else if (next.exp) expRef.current?.focus();
+    else if (next.cvc) cvcRef.current?.focus();
+    else if (nameErr) holderNameRef.current?.focus();
+    else if (zipErrLocal) zipRef.current?.focus();
+    else if (addressErrLocal) addressRef.current?.focus();
+    else if (cityErrLocal) cityRef.current?.focus();
+    else if (cErr) cpfRef.current?.focus();
+    return false;
   }
+
+  return true;
+}
 
   function validatePixForm() {
     const n = pixName.trim().replace(/\s+/g, " ");
@@ -4167,8 +4203,7 @@ couponInteractedRef.current = false;
                                     </motion.div>
 
                                     <div className="mt-4 max-w-[420px] text-[12px] leading-relaxed text-white/55">
-                                      Pagamento confirmado com sucesso. Você já
-                                      pode fechar esta janela.
+                                      Pagamento confirmado com sucesso. Aguarde estamos te redirecionado...
                                     </div>
 
                                     {!!liveStatusDetail && (
@@ -4553,6 +4588,7 @@ couponInteractedRef.current = false;
                                         }
                                         value={address}
                                         onChange={setAddress}
+                                        error={addressError}
                                         autoComplete="street-address"
                                         name="address"
                                         shakeSignal={shakeSignal}
@@ -4581,6 +4617,7 @@ couponInteractedRef.current = false;
                                         placeholder="City"
                                         value={city}
                                         onChange={setCity}
+                                        error={cityError}
                                         disabled={cityLocked}
                                         right={
                                           cityLocked ? (
@@ -4697,7 +4734,7 @@ couponInteractedRef.current = false;
 
                                           <div className="mt-4 max-w-[420px] text-[12px] leading-relaxed text-white/55">
                                             Pagamento confirmado com sucesso.
-                                            Você já pode fechar esta janela.
+                                            Aguarde estamos te redirecionado...
                                           </div>
 
                                           {!!liveStatusDetail && (
@@ -5502,17 +5539,30 @@ couponInteractedRef.current = false;
                           </span>
                         </motion.button>
 
-                        <div className="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-[11px] text-white/35">
-                          <span>Powered by WyzeBank</span>
-                          <span className="text-white/20">•</span>
-                          <span className="hover:text-white/60 transition cursor-pointer">
-                            Terms
-                          </span>
-                          <span className="text-white/20">•</span>
-                          <span className="hover:text-white/60 transition cursor-pointer">
-                            Privacy
-                          </span>
-                        </div>
+<div className="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-[11px] text-white/35">
+  <span>Powered by WyzeBank</span>
+  <span className="text-white/20">•</span>
+
+  <a
+    href="https://atlasbot.com.br/faq/termos-de-uso"
+    className="hover:text-white/60 transition cursor-pointer"
+    target="_blank"
+    rel="noopener noreferrer"
+  >
+    Termos
+  </a>
+
+  <span className="text-white/20">•</span>
+
+  <a
+    href="https://atlasbot.com.br/faq/política-de-privacidade"
+    className="hover:text-white/60 transition cursor-pointer"
+    target="_blank"
+    rel="noopener noreferrer"
+  >
+    Privacidade
+  </a>
+</div>
                       </div>
                     </div>
 

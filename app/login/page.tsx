@@ -97,7 +97,7 @@ export default function Page() {
         className="relative flex flex-1 flex-col justify-between px-14 py-12 text-white"
         style={{
           backgroundImage:
-            "url('/cdn/wallpaper/colorful-abstract-5120x2880-17289.png')",
+            "url('/cdn/wallpaper/abstract-background-3840x2160-11467.jpg')",
           backgroundSize: "cover",
           backgroundPosition: "center",
           backgroundRepeat: "no-repeat",

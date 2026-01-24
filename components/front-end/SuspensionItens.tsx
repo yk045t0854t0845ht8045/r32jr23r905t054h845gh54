@@ -738,7 +738,7 @@ export default function SuspencionItens({
                                        bg-gradient-to-b from-[#2B67FF] to-[#214FC4]
                                        text-white shadow-[0_18px_60px_rgba(33,79,196,0.05)]
                                        hover:brightness-110 transition
-                                       flex items-center justify-center
+                                       flex items-center justify-center mb-3
                                        ${submitting ? "opacity-80 cursor-not-allowed" : ""}`}
                           >
                             {submitting ? "Enviando..." : "Enviar solicitação"}

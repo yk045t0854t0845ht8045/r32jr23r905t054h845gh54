@@ -113,7 +113,7 @@ export default function Page() {
 
         <div className="max-w-md">
           <h1 className="mb-3 text-2xl leading-snug" style={{ fontWeight: 450 }}>
-            Crie bots exclusivos e totalmente personalizados em minutos com a
+            Crie bots discord exclusivos e totalmente personalizados em minutos com a
             AtlasBot
           </h1>
 
@@ -126,7 +126,7 @@ export default function Page() {
           </p>
 
           <div className="mt-6 text-xs text-white/60 w-[999px]">
-            © {new Date().getFullYear()} AtlasBot. Todos os direitos reservados.
+           © 2025–2026 Wyze Code — AtlasBot. Todos os direitos reservados.
           </div>
         </div>
       </section>

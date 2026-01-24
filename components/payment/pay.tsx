@@ -5540,7 +5540,7 @@ couponInteractedRef.current = false;
                         </motion.button>
 
 <div className="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-[11px] text-white/35">
-  <span>Powered by WyzeBank</span>
+  <span>Powered by WyzePay</span>
   <span className="text-white/20">•</span>
 
   <a

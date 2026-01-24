@@ -27,40 +27,40 @@ export default function Page() {
   const passwordRef = useRef<HTMLInputElement>(null);
 
   const router = useRouter();
-const [loading, setLoading] = useState(true);
-const [discordUser, setDiscordUser] = useState<any>(null);
-const [step, setStep] = useState<"discord" | "plan">("discord");
+  const [loading, setLoading] = useState(true);
+  const [discordUser, setDiscordUser] = useState<any>(null);
+  const [step, setStep] = useState<"discord" | "plan">("discord");
 
-const handleBack = () => {
-  if (step === "plan") {
-    setStep("discord");
-    return;
-  }
-
-  router.push("/");
-};
-
-useEffect(() => {
-  const checkAuth = async () => {
-    const res = await fetch("/api/me", {
-      credentials: "include",
-    });
-
-    const data = await res.json();
-
-    if (data.user) {
-      setDiscordUser(data.user);
-      setLoading(false);
+  const handleBack = () => {
+    if (step === "plan") {
+      setStep("discord");
       return;
     }
 
-    setTimeout(() => {
-      window.location.href = "/api/auth/discord";
-    }, 1500);
+    router.push("/");
   };
 
-  checkAuth();
-}, []);
+  useEffect(() => {
+    const checkAuth = async () => {
+      const res = await fetch("/api/me", {
+        credentials: "include",
+      });
+
+      const data = await res.json();
+
+      if (data.user) {
+        setDiscordUser(data.user);
+        setLoading(false);
+        return;
+      }
+
+      setTimeout(() => {
+        window.location.href = "/api/auth/discord";
+      }, 1500);
+    };
+
+    checkAuth();
+  }, []);
 
   useEffect(() => {
     if (!email) {
@@ -132,12 +132,12 @@ useEffect(() => {
       </section>
 
       {/* RIGHT SIDE */}
-      <section className="relative bg-[#121212] w-[500px] overflow-hidden">
+      <section className="relative bg-[#080808] w-[500px] overflow-hidden">
         {/* Back Button */}
         <div className="absolute left-6 top-6 z-10">
           <Button
-            className="rounded-[7px] text-[12.5px]"
-            href="/"
+            className="rounded-[7px] text-[12.5px] border-white/10 bg-black/25 hover:bg-black/15 hover:border-white/10 shadow-[0_22px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl transition-all"
+            onClick={handleBack}
             iconLeft={
               <svg
                 className="h-4 w-4"
@@ -169,9 +169,10 @@ useEffect(() => {
         </div>
 
         {/* LOADER ↔ CONTEÚDO */}
-       <AnimatePresence>
-  {loading && (
-    <motion.div className="absolute inset-0 flex items-center justify-center"
+        <AnimatePresence>
+          {loading && (
+            <motion.div
+              className="absolute inset-0 flex items-center justify-center"
               initial={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.4 }}
@@ -222,23 +223,21 @@ useEffect(() => {
           )}
         </AnimatePresence>
 
-{!loading && discordUser && (
-  <div className="px-6">
-    <AnimatePresence mode="wait">
-      {step === "discord" && (
-        <DiscordProfile
-          key="discord"
-          user={discordUser}
-          onConfirm={() => setStep("plan")}
-        />
-      )}
+        {!loading && discordUser && (
+          <div className="px-6">
+            <AnimatePresence mode="wait">
+              {step === "discord" && (
+                <DiscordProfile
+                  key="discord"
+                  user={discordUser}
+                  onConfirm={() => setStep("plan")}
+                />
+              )}
 
-      {step === "plan" && (
-        <PriceCard key="plan" />
-      )}
-    </AnimatePresence>
-  </div>
-)}
+              {step === "plan" && <PriceCard key="plan" />}
+            </AnimatePresence>
+          </div>
+        )}
       </section>
     </main>
   );

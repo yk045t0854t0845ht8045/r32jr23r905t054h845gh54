@@ -40,12 +40,11 @@ export default function DiscordProfile({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -12 }}
       transition={{ duration: 0.35, ease: "easeOut" }}
-      className="mt-10 rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.06] to-white/[0.02] backdrop-blur-xl px-8 py-7 space-y-5 shadow-2xl"
+      className="mt-4 rounded-2xl px-2 py-7 space-y-5 shadow-2xl"
     >
-      {/* ACCOUNT SELECT */}
       <div ref={selectRef} className="relative">
         <button onClick={() => setOpenSelect((v) => !v)} className="w-full">
-          <div className="flex items-center gap-4 rounded-xl bg-[#151515] px-4 py-3 border border-white/10 hover:border-white/20 hover:bg-[#1b1b1b] transition-all">
+          <div className="flex items-center gap-4 rounded-xl bg-black/25 shadow-[0_22px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl px-4 py-3 border border-white/10 hover:border-white/15 hover:black/65 transition-all shadow-2xl">
             <div className="relative">
               <img
                 src={`https://cdn.discordapp.com/avatars/${active.id}/${active.avatar}.png`}
@@ -79,7 +78,6 @@ export default function DiscordProfile({
           </div>
         </button>
 
-        {/* SELECT MENU */}
         <AnimatePresence>
           {openSelect && (
             <motion.div
@@ -87,15 +85,12 @@ export default function DiscordProfile({
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -4, scale: 0.99 }}
               transition={{ duration: 0.14, ease: "easeOut" }}
-              className="absolute z-30 mt-1.5 w-full rounded-2xl border border-white/10
-                         bg-gradient-to-b from-[#151515] to-[#0c0c0c]
-                         backdrop-blur-xl shadow-[0_20px_50px_rgba(0,0,0,0.6)] p-3"
+              className="absolute z-30 mt-1.5 w-full rounded-2xl border
+                        border-white/10 bg-black/25 shadow-[0_22px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl transition-all p-3"
             >
               <div className="space-y-1">
                 {accounts.map((acc, idx) => {
                   const isActive = acc.id === active.id;
-
-                  // ✅ key realmente única (mesmo se algum id vier duplicado/bugado)
                   const stableKey = `${String(acc?.id || "acc")}:${String(
                     acc?.username || "user",
                   )}:${idx}`;
@@ -111,7 +106,7 @@ export default function DiscordProfile({
                         text-left transition-all border
                         ${
                           isActive
-                            ? "bg-white/[0.08] border-white/20"
+                            ? "bg-white/[0.03] border-white/10"
                             : "border-transparent hover:bg-white/[0.06] hover:border-white/20"
                         }`}
                     >
@@ -144,7 +139,7 @@ export default function DiscordProfile({
                 }}
                 className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5
                            text-left transition-all border border-transparent
-                           hover:bg-white/[0.06] hover:border-white/20"
+                           hover:bg-white/[0.03] hover:border-white/10"
               >
                 <div
                   className="flex h-8 w-8 items-center justify-center rounded-full 
@@ -166,8 +161,7 @@ export default function DiscordProfile({
         </AnimatePresence>
       </div>
 
-      {/* SECURITY DETAILS */}
-      <div className="rounded-xl border border-white/10 bg-[#141414] px-5 py-4 space-y-3">
+      <div className="rounded-xl border border-white/10 bg-black/25 shadow-[0_22px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl px-5 py-4 space-y-3">
         <p className="text-sm font-medium text-white">Permissões concedidas</p>
 
         <ul className="space-y-2 text-sm text-white/70">
@@ -175,34 +169,36 @@ export default function DiscordProfile({
           <li>• Endereço de e-mail associado à conta</li>
           <li>• Informações públicas do perfil Discord</li>
           <li>• Uso exclusivo para autenticação e sessão</li>
-          <li className="text-white/40">• Nenhuma mensagem será enviada ou lida</li>
+          <li className="text-white/40">
+            • Nenhuma mensagem será enviada ou lida
+          </li>
         </ul>
       </div>
 
-      {/* TRUST INFO */}
-      <div className="rounded-xl border border-white/10 bg-white/[0.04] px-5 py-4 text-sm text-white/60">
+      <div className="rounded-xl bg-black/25 shadow-[0_22px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl px-5 py-4 text-[12px] text-white/60 border border-white/10">
         Sessão protegida. Você pode revogar o acesso a qualquer momento nas
         configurações da sua conta Discord.
       </div>
 
-      {/* CONFIRM BUTTON */}
       <button
-        className="w-full rounded-xl bg-gradient-to-b from-[#214FC4] to-[#214FC4]/90
-             text-white py-3 text-sm font-medium shadow-lg
-             hover:brightness-95 active:scale-[0.99] transition"
+        className="mt-5 w-full rounded-xl py-3.5 text-[13px] font-semibold 
+                                    bg-gradient-to-b from-[#2B67FF] to-[#214FC4]
+                                    text-white shadow-[0_18px_60px_rgba(33,79,196,0.35)]
+                                    hover:brightness-110 transition
+                                    relative flex items-center justify-center 
+                                    active:bg-[#214FC4]/90 active:scale-[0.99] transition"
         onClick={onConfirm}
       >
         Confirmar e continuar
       </button>
 
-      {/* LEGAL TEXT */}
-      <p className="text-center text-[10px] text-white/40 leading-relaxed">
+      <p className="text-center text-[10px] text-white/30 leading-relaxed">
         Ao confirmar, você concorda com todos os{" "}
-        <span className="text-white/60 hover:underline cursor-pointer">
+        <span className="text-white/50 hover:underline cursor-pointer">
           Termos de Serviço
         </span>{" "}
         e a{" "}
-        <span className="text-white/60 hover:underline cursor-pointer">
+        <span className="text-white/50 hover:underline cursor-pointer">
           Política de Privacidade
         </span>
         .

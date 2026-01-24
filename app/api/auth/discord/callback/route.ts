@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
+import { upsertDiscordUserFromDiscord } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
@@ -71,28 +72,39 @@ function hmacSign(data: string) {
   return crypto.createHmac("sha256", SESSION_SECRET).update(data).digest("hex");
 }
 
-function buildSessionPayload(user: any) {
+function buildSessionCookie(discordId: string) {
   const issued_at = Date.now();
   const exp_ms =
-    issued_at + Math.max(60, Number.isFinite(SESSION_MAX_AGE_SECONDS) ? SESSION_MAX_AGE_SECONDS : 86400) * 1000;
+    issued_at +
+    Math.max(
+      60,
+      Number.isFinite(SESSION_MAX_AGE_SECONDS) ? SESSION_MAX_AGE_SECONDS : 86400,
+    ) *
+      1000;
 
-  // NÃO mexe em UI nem funcionalidades: mantém o user inteiro (como antes),
-  // só adiciona metadados pra robustez.
   return {
-    ...user,
+    discord_id: String(discordId || "").trim(),
     __session: {
-      v: 1,
+      v: 2,
       issued_at,
       exp_ms,
     },
   };
 }
 
-async function fetchJsonWithTimeout(url: string, init: RequestInit, timeoutMs = 12000) {
+async function fetchJsonWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = 12000,
+) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), Math.max(2000, timeoutMs));
   try {
-    const res = await fetch(url, { ...init, signal: ctrl.signal, cache: "no-store" });
+    const res = await fetch(url, {
+      ...init,
+      signal: ctrl.signal,
+      cache: "no-store",
+    });
     let data: any = null;
     try {
       data = await res.json();
@@ -145,8 +157,6 @@ export async function GET(req: NextRequest) {
   }
 
   // state é one-time
-  // (limpa já aqui)
-  // obs: mesmo se falhar depois, evita replay
   let response = safeRedirect(req);
   response.cookies.set("discord_oauth_state", "", { path: "/", maxAge: 0 });
 
@@ -196,41 +206,53 @@ export async function GET(req: NextRequest) {
     return response;
   }
 
-  // payload com metadados (sem alterar funcionalidade do front)
-  const payload = buildSessionPayload(user);
+  // ✅ salva/atualiza no Supabase (banco)
+  const up = await upsertDiscordUserFromDiscord(user);
 
-  // stringify robusto (evita caracteres de controle)
-  const userJson = JSON.stringify(payload).replace(
+  // ✅ cookie agora vira “sessão mínima” (não carrega user inteiro)
+  const sessionPayload = buildSessionCookie(String(user?.id || ""));
+
+  // se supabase falhar, ainda deixa um fallback mínimo (não muda sua UI)
+  // (você pode remover esse bloco depois se quiser “somente Supabase”)
+  if (!up.ok) {
+    (sessionPayload as any).__session.supabase_ok = false;
+  } else {
+    (sessionPayload as any).__session.supabase_ok = true;
+  }
+
+  const sessionJson = JSON.stringify(sessionPayload).replace(
     /[\u0000-\u001F\u007F]/g,
     "",
   );
 
-  const sig = hmacSign(userJson);
+  const sig = hmacSign(sessionJson);
 
-  // cookie principal (httpOnly -> mais seguro contra XSS)
-  response.cookies.set("discord_user", userJson, {
+  response.cookies.set("discord_user", sessionJson, {
     path: "/",
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
-    maxAge: Math.max(60, Number.isFinite(SESSION_MAX_AGE_SECONDS) ? SESSION_MAX_AGE_SECONDS : 86400),
+    maxAge: Math.max(
+      60,
+      Number.isFinite(SESSION_MAX_AGE_SECONDS) ? SESSION_MAX_AGE_SECONDS : 86400,
+    ),
   });
 
-  // cookie de assinatura (anti-tamper)
-  // se SESSION_SECRET estiver vazio, ainda funciona como antes, só perde o anti-tamper
   if (sig) {
     response.cookies.set("discord_user_sig", sig, {
       path: "/",
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
-      maxAge: Math.max(60, Number.isFinite(SESSION_MAX_AGE_SECONDS) ? SESSION_MAX_AGE_SECONDS : 86400),
+      maxAge: Math.max(
+        60,
+        Number.isFinite(SESSION_MAX_AGE_SECONDS) ? SESSION_MAX_AGE_SECONDS : 86400,
+      ),
     });
   } else {
     response.cookies.set("discord_user_sig", "", { path: "/", maxAge: 0 });
   }
 
-  // headers seguros
   Object.entries(SECURE_REDIRECT_HEADERS).forEach(([k, v]) =>
     response.headers.set(k, v),
   );

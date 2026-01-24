@@ -231,3 +231,8 @@ input[type="password"]:-webkit-autofill {
   --field-placeholder: rgba(232, 238, 252, 0.55);
 }
 */
+
+                            div::-webkit-scrollbar {
+                              width: 0px;
+                              height: 0px;
+                            }

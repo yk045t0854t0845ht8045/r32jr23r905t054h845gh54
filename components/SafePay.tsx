@@ -11,15 +11,9 @@ type Method = "card" | "pix" | "boleto";
 type SafePayProps = {
   open: boolean;
   onClose: () => void;
-
-  // mantém compatível com seu PriceCard (aceita qualquer coisa e normaliza)
   plan: any;
-
-  // se você já passa esses props hoje, não quebra
   billing?: any;
   method?: any;
-
-  // repassa qualquer outro prop sem estourar
   [key: string]: any;
 };
 
@@ -27,7 +21,6 @@ function safeToText(v: any) {
   if (v == null) return "";
   if (typeof v === "string") return v;
   if (typeof v === "number" || typeof v === "boolean") return String(v);
-  // se vier objeto, evita render direto
   try {
     const s = JSON.stringify(v);
     return s === "{}" ? "" : s;
@@ -38,8 +31,6 @@ function safeToText(v: any) {
 
 function normalizePlan(plan: any): Plan | null {
   if (plan === "starter" || plan === "pro" || plan === "premium") return plan;
-
-  // tenta extrair de objetos comuns: {plan}, {id}, {slug}, {key}, {name}
   if (plan && typeof plan === "object") {
     const cand =
       plan.plan ??
@@ -83,7 +74,6 @@ type PayComponentProps = {
   [key: string]: any;
 };
 
-//  Import seguro: pega default OU named export Pay (agora tipado)
 const PaySafeLoaded = dynamic<PayComponentProps>(
   async () => {
     const mod: any = await import("../components/payment/pay");
@@ -97,7 +87,7 @@ const PaySafeLoaded = dynamic<PayComponentProps>(
 
     return Comp as React.ComponentType<PayComponentProps>;
   },
-  { ssr: false }
+  { ssr: false },
 );
 
 export default function SafePay(props: SafePayProps) {
@@ -115,18 +105,21 @@ export default function SafePay(props: SafePayProps) {
     };
   }, [plan, billing, method]);
 
-  //  fallback caso selected/plan venha {} ou inválido
   if (!normalized.plan) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
         <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
           <div className="text-base font-semibold">Checkout indisponível</div>
           <div className="mt-2 text-sm text-neutral-600">
-            Não consegui identificar o plano selecionado. Isso evita a página quebrar.
+            Não consegui identificar o plano selecionado. Isso evita a página
+            quebrar.
           </div>
 
           <div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">
-            plano recebido: <span className="font-mono">{normalized.rawPlanText || "(vazio)"}</span>
+            plano recebido:{" "}
+            <span className="font-mono">
+              {normalized.rawPlanText || "(vazio)"}
+            </span>
           </div>
 
           <div className="mt-4 flex justify-end gap-2">
@@ -148,7 +141,9 @@ export default function SafePay(props: SafePayProps) {
       fallback={
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
-            <div className="text-base font-semibold">O checkout falhou, mas a página não caiu</div>
+            <div className="text-base font-semibold">
+              O checkout falhou, mas a página não caiu
+            </div>
             <div className="mt-2 text-sm text-neutral-600">
               Feche e tente novamente. Se persistir, recarregue a página.
             </div>

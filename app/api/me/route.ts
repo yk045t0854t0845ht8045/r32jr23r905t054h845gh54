@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import crypto from "crypto";
+import { getDiscordUserById } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,7 +19,9 @@ const SESSION_SECRET = (
   ""
 ).trim();
 
-function safeJsonParse<T = any>(raw: string): { ok: true; value: T } | { ok: false } {
+function safeJsonParse<T = any>(
+  raw: string,
+): { ok: true; value: T } | { ok: false } {
   try {
     if (!raw) return { ok: false };
     return { ok: true, value: JSON.parse(raw) as T };
@@ -70,37 +73,104 @@ function clearSessionCookies(resp: NextResponse) {
   return resp;
 }
 
+function mapDbUserToDiscordShape(row: any) {
+  const raw = row?.raw && typeof row.raw === "object" ? row.raw : null;
+
+  // mantém o shape compatível com o que seu front já usa
+  return {
+    id: String(row?.discord_id || raw?.id || ""),
+    username: String(row?.username ?? raw?.username ?? ""),
+    discriminator: String(row?.discriminator ?? raw?.discriminator ?? ""),
+    avatar: row?.avatar ?? raw?.avatar ?? null,
+    email: row?.email ?? raw?.email ?? null,
+
+    // mantém raw disponível (não altera funcionalidades)
+    raw: raw ?? null,
+  };
+}
+
 export async function GET() {
-  // Next 16 pode exigir await (e mesmo se não exigir, não quebra)
   const store = await cookies();
 
   const rawUser = store.get("discord_user")?.value || "";
   const rawSig = store.get("discord_user_sig")?.value || "";
 
   if (!rawUser) {
-    return NextResponse.json({ user: null }, { status: 200, headers: SECURE_JSON_HEADERS });
+    return NextResponse.json(
+      { user: null },
+      { status: 200, headers: SECURE_JSON_HEADERS },
+    );
   }
 
   // anti-tamper (se existir secret e sig)
   if (SESSION_SECRET && rawSig) {
     const sig2 = hmacSign(rawUser);
     if (!sig2 || !timingSafeEq(rawSig, sig2)) {
-      const resp = NextResponse.json({ user: null }, { status: 200, headers: SECURE_JSON_HEADERS });
+      const resp = NextResponse.json(
+        { user: null },
+        { status: 200, headers: SECURE_JSON_HEADERS },
+      );
       return clearSessionCookies(resp);
     }
   }
 
-  const userObj = tryParseCookieObject(rawUser);
-  if (!userObj) {
-    const resp = NextResponse.json({ user: null }, { status: 200, headers: SECURE_JSON_HEADERS });
+  const cookieObj = tryParseCookieObject(rawUser);
+  if (!cookieObj) {
+    const resp = NextResponse.json(
+      { user: null },
+      { status: 200, headers: SECURE_JSON_HEADERS },
+    );
     return clearSessionCookies(resp);
   }
 
-  if (isExpired(userObj)) {
-    const resp = NextResponse.json({ user: null }, { status: 200, headers: SECURE_JSON_HEADERS });
+  if (isExpired(cookieObj)) {
+    const resp = NextResponse.json(
+      { user: null },
+      { status: 200, headers: SECURE_JSON_HEADERS },
+    );
     return clearSessionCookies(resp);
   }
 
-  // mantém compat: retorna o user inteiro (inclui email se estiver no cookie)
-  return NextResponse.json({ user: userObj }, { status: 200, headers: SECURE_JSON_HEADERS });
+  // ✅ NOVO: cookie agora é “sessão mínima”
+  const discordId = String(cookieObj?.discord_id || cookieObj?.id || "").trim();
+
+  if (!discordId) {
+    // compat: se por algum motivo vier cookie antigo com user completo
+    if (cookieObj?.username && cookieObj?.id) {
+      return NextResponse.json(
+        { user: cookieObj },
+        { status: 200, headers: SECURE_JSON_HEADERS },
+      );
+    }
+
+    const resp = NextResponse.json(
+      { user: null },
+      { status: 200, headers: SECURE_JSON_HEADERS },
+    );
+    return clearSessionCookies(resp);
+  }
+
+  // ✅ Busca no Supabase
+  const db = await getDiscordUserById(discordId);
+
+  if (db.ok && db.user) {
+    return NextResponse.json(
+      { user: mapDbUserToDiscordShape(db.user) },
+      { status: 200, headers: SECURE_JSON_HEADERS },
+    );
+  }
+
+  // fallback compat: se não achou no supabase, mas cookie antigo tinha user completo
+  if (cookieObj?.username && cookieObj?.id) {
+    return NextResponse.json(
+      { user: cookieObj },
+      { status: 200, headers: SECURE_JSON_HEADERS },
+    );
+  }
+
+  const resp = NextResponse.json(
+    { user: null },
+    { status: 200, headers: SECURE_JSON_HEADERS },
+  );
+  return clearSessionCookies(resp);
 }

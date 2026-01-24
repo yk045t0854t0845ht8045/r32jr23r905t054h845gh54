@@ -46,7 +46,7 @@ const PLAN_PRICES: Record<Billing, Record<Plan, number>> = {
   monthly: {
     starter: 14.9,
     pro: 19.9,
-    premium: 24.99,
+    premium: 22.99,
   },
   annual: {
     starter: 12.49,
@@ -58,10 +58,6 @@ const PLAN_PRICES: Record<Billing, Record<Plan, number>> = {
 /* ------------------------------------------------------------------ */
 /* HELPERS */
 /* ------------------------------------------------------------------ */
-
-const TEST_COUPON_CODE = "DEVS";
-const TEST_COUPON_TARGET_TOTAL = 0.01;
-const TEST_COUPON_ENABLED = process.env.NODE_ENV !== "production";
 
 function BankOpenLoader({ reduceMotion }: { reduceMotion: boolean }) {
   return (
@@ -186,6 +182,14 @@ const UF_CODES = [
   "TO",
 ];
 
+
+
+
+
+
+
+
+
 function getCookieValue(name: string): string {
   try {
     if (typeof document === "undefined") return "";
@@ -205,7 +209,7 @@ async function readDiscordUserSafe(): Promise<any | null> {
 
   // 2) fallback seguro: server lê cookie e devolve user
   try {
-    const res = await fetch("/api/auth/discord/me", {
+    const res = await fetch("/api/me", {
       method: "GET",
       credentials: "include",
       cache: "no-store",
@@ -234,6 +238,17 @@ function readDiscordUserFromCookie(): any | null {
     return null;
   }
 }
+
+
+
+
+
+
+
+
+
+
+
 
 function formatBRL(value: number) {
   return new Intl.NumberFormat("pt-BR", {
@@ -401,6 +416,8 @@ function safeClipboardWrite(text: string) {
   });
 }
 
+
+
 /* ---------------------------- ZIP / ADDRESS ---------------------------- */
 type CountryKey =
   | "Brasil"
@@ -503,6 +520,31 @@ function IconCheckCircleGreen(props: { className?: string }) {
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconXCircleRed(props: { className?: string }) {
+  return (
+    <svg
+      className={props.className}
+      width="84"
+      height="84"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M22 12a10 10 0 1 1-20 0a10 10 0 0 1 20 0Z"
+        stroke="#ef4444"
+        strokeWidth="2"
+      />
+      <path
+        d="M8 8l8 8M16 8l-8 8"
+        stroke="#ef4444"
+        strokeWidth="2"
+        strokeLinecap="round"
       />
     </svg>
   );
@@ -631,45 +673,6 @@ function IconCard(props: { className?: string }) {
         d="M4.5 6h15A2.5 2.5 0 0 1 22 8.5v9A2.5 2.5 0 0 1 19.5 20h-15A2.5 2.5 0 0 1 2 17.5v-9A2.5 2.5 0 0 1 4.5 6Z"
         stroke="currentColor"
         strokeWidth="2"
-      />
-    </svg>
-  );
-}
-
-function IconBoleto(props: { className?: string }) {
-  return (
-    <svg
-      className={props.className}
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden="true"
-    >
-      <path d="M6 3h12v18H6V3Z" stroke="currentColor" strokeWidth="2" />
-      <path
-        d="M9 7h6"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-      <path
-        d="M9 11h6"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-      <path
-        d="M8.5 15.5h7"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-      <path
-        d="M8.5 18.5h7"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
       />
     </svg>
   );
@@ -1474,13 +1477,14 @@ export default function Pay({
   const [stateAutoHint, setStateAutoHint] = useState<string | null>(null);
   const zipAbortRef = useRef<AbortController | null>(null);
   const zipDebounceRef = useRef<number | null>(null);
+  const cardEmailTouchedRef = useRef(false);
 
   // Inteligência: cache + dedupe de lookup postal
   const zipCacheRef = useRef<Map<string, any>>(new Map());
   const lastLookupKeyRef = useRef<string>("");
 
   // Discord (email vem do cookie)
-  const [discordEmail, setDiscordEmail] = useState<string>("");
+  const [discordEmail, setDiscordEmail] = useState<string>(""); 
 
   // PIX: dados que o usuário digita
   const [pixName, setPixName] = useState<string>("");
@@ -1701,6 +1705,23 @@ export default function Pay({
     [stopPolling, isFinalStatus],
   );
 
+  useEffect(() => {
+  if (!open) return;
+
+  const mail = String(discordEmail || "").trim();
+  if (!mail) return;
+
+  // ✅ só preenche se usuário não mexeu e o campo está vazio
+  setEmail((prev) => {
+    const cur = String(prev || "").trim();
+    if (cardEmailTouchedRef.current) return prev;
+    return cur ? prev : mail;
+  });
+
+  // ✅ não deixa erro “fantasma” quando preenche
+  setEmailError(null);
+}, [open, discordEmail]);
+
   // FOOTER MEASURE (para não cobrir inputs)
   const footerRef = useRef<HTMLDivElement | null>(null);
   const [footerH, setFooterH] = useState<number>(220);
@@ -1839,10 +1860,51 @@ export default function Pay({
   }, [open]);
 
   useEffect(() => {
-    if (open) {
-      const du = readDiscordUserFromCookie();
-      const mail = String(du?.email || "").trim();
+  let alive = true;
+
+  const loadDiscordEmailFromSupabase = async () => {
+    try {
+      const res = await fetch("/api/me", {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+
+      const data = await res.json().catch(() => null);
+      const mail = String(data?.user?.email || "").trim();
+
+      if (!alive) return;
+
       setDiscordEmail(mail);
+
+      // ✅ CARD: pré-preenche, mas usuário pode apagar/trocar
+      if (mail && !String(email || "").trim()) {
+        setEmail(mail);
+      }
+
+      // ✅ BOLETO: pré-preenche, mas usuário pode apagar/trocar
+      if (mail && !String(boletoEmail || "").trim()) {
+        setBoletoEmail(mail);
+      }
+    } catch {
+      // não quebra UI
+    }
+  };
+
+  loadDiscordEmailFromSupabase();
+
+  return () => {
+    alive = false;
+  };
+  // ⚠️ intencional: roda 1x ao abrir o Pay
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
+  useEffect(() => {
+    if (open) {
 
       setPixStep("form");
       setPixName("");
@@ -1870,8 +1932,13 @@ export default function Pay({
       setZipError(null);
       setCityLocked(false);
       setStateAutoHint(null);
+      setAppliedCouponMeta(null);
 
-      setEmail("");
+      cardEmailTouchedRef.current = false; // ✅ reset do “tocou no campo” ao abrir
+
+      const mail = String(discordEmail || "").trim();
+      setEmail(mail || "");
+
       setEmailError(null);
       setCardCpfError(null);
       setPixCpfError(null);
@@ -1884,7 +1951,6 @@ export default function Pay({
 
       setBoletoName("");
       setBoletoCpf("");
-      setBoletoEmail(mail || ""); //  vem do discord igual no Pix
       setBoletoStep("form");
       setBoletoSentToEmail("");
       setBoletoZip("");
@@ -1950,6 +2016,20 @@ export default function Pay({
     return () => document.removeEventListener("mousedown", onDown, true);
   }, [couponMode]);
 
+
+  type AppliedCouponMeta = {
+  code: string;
+  source: "coupon" | "gift_coupon";
+  discount: {
+    kind: "percent" | "amount" | "target_total";
+    percent: number | null;
+    amount_cents: number | null;
+    target_total_cents: number | null;
+  };
+};
+
+const [appliedCouponMeta, setAppliedCouponMeta] = useState<AppliedCouponMeta | null>(null);
+
   // Ajusta defaults quando muda país (evita inconsistências visuais / select inválido)
   useEffect(() => {
     if (!open) return;
@@ -1997,22 +2077,34 @@ export default function Pay({
 
     const baseTotalCents = subtotalCents + taxCents;
 
-    const appliedCode = coupon.trim().toUpperCase();
-    const isTestCouponApplied =
-      couponMode === "applied" &&
-      TEST_COUPON_ENABLED &&
-      appliedCode === TEST_COUPON_CODE;
+const appliedCode = coupon.trim().toUpperCase();
 
-    let discountCents = 0;
-    let totalCents = baseTotalCents;
-    let discountLabel: string | null = null;
+const hasApplied =
+  couponMode === "applied" &&
+  !!appliedCouponMeta &&
+  appliedCouponMeta.code === appliedCode;
 
-    if (isTestCouponApplied) {
-      const targetCents = Math.max(toCents(TEST_COUPON_TARGET_TOTAL), 1);
-      totalCents = targetCents;
-      discountCents = Math.max(0, baseTotalCents - totalCents);
-      discountLabel = `Cupom (${appliedCode})`;
-    }
+let discountCents = 0;
+let totalCents = baseTotalCents;
+let discountLabel: string | null = null;
+
+if (hasApplied) {
+  const d = appliedCouponMeta.discount;
+
+  if (d.kind === "percent") {
+    const pct = Math.max(0, Math.min(100, Number(d.percent || 0)));
+    discountCents = Math.round((baseTotalCents * pct) / 100);
+  } else if (d.kind === "amount") {
+    discountCents = Math.max(0, Number(d.amount_cents || 0));
+  } else if (d.kind === "target_total") {
+    const target = Math.max(0, Number(d.target_total_cents || 0));
+    discountCents = Math.max(0, baseTotalCents - target);
+  }
+
+  discountCents = Math.min(discountCents, baseTotalCents);
+  totalCents = Math.max(0, baseTotalCents - discountCents);
+  discountLabel = `Cupom (${appliedCode})`;
+}
 
     return {
       subtotal: centsToNumber(subtotalCents),
@@ -2027,33 +2119,59 @@ export default function Pay({
   const billingNote =
     safeBilling === "annual" ? "Cobrança anual" : "Cobrança mensal";
 
-  const basePrimaryBtnLabel =
-    method === "card"
-      ? `Pagar ${formatBRL(order.total)}`
-      : method === "pix"
-        ? pixStep === "qr"
-          ? "Confirmar e Pagar"
-          : pixStep === "success"
-            ? "Pagamento confirmado"
+const pixFailed =
+  method === "pix" &&
+  pixStep === "qr" &&
+  (liveStatus === "cancelled" ||
+    liveStatus === "expired" ||
+    liveStatus === "rejected");
+
+const pixPaid =
+  method === "pix" && (pixStep === "success" || liveStatus === "approved");
+
+const pixAwaiting =
+  method === "pix" && pixStep === "qr" && !pixFailed && !pixPaid;
+
+const basePrimaryBtnLabel =
+  method === "card"
+    ? `Pagar ${formatBRL(order.total)}`
+    : method === "pix"
+      ? pixPaid
+        ? "Pagamento Efetuado"
+        : pixFailed
+          ? "Tentar novamente"
+          : pixStep === "qr"
+            ? "Aguardando Pagamento"
             : "Continuar"
-        : boletoStep === "generated"
-          ? "Boleto gerado"
-          : "Enviar Boleto";
+      : boletoStep === "generated"
+        ? "Boleto gerado"
+        : "Enviar Boleto";
 
-  const primaryBtnDisabled =
-    actionState === "loading" ||
-    (method === "pix" && pixStep === "success") ||
-    (method === "boleto" && boletoStep === "generated");
+// ✅ Pix: quando gerou QR fica travado (Aguardando Pagamento).
+// ✅ Só libera quando falhar (cancelado/expirado/recusado) para "Tentar novamente".
+const primaryBtnDisabled =
+  actionState === "loading" ||
+  (method === "pix" && (pixAwaiting || pixPaid)) ||
+  (method === "boleto" && boletoStep === "generated");
 
-  const primaryBtnLabel =
-    actionState === "loading"
-      ? "Processando..."
+// ✅ Pix não deve mostrar "Pix gerado" — sempre "Aguardando Pagamento" quando tiver QR.
+const primaryBtnLabel =
+  method === "pix"
+    ? actionState === "loading"
+      ? " " // processando...
+      : pixPaid
+        ? "Pagamento Efetuado"
+        : pixFailed
+          ? "Tentar novamente"
+          : pixStep === "qr"
+            ? "Aguardando Pagamento"
+            : "Continuar"
+    : actionState === "loading"
+      ? " " // processando...
       : actionState === "success"
         ? method === "card"
           ? "Pagamento confirmado"
-          : method === "pix"
-            ? "Pix gerado"
-            : "Boleto enviado"
+          : "Boleto enviado"
         : basePrimaryBtnLabel;
 
   // Validação inteligente “live” (leve + não intrusiva)
@@ -2377,79 +2495,113 @@ export default function Pay({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zip, country, open]);
 
-  function startCouponEditSmart() {
+function startCouponEditSmart() {
+  setCouponError(null);
+  setCouponValidating(false);
+  setCouponMode("editing");
+
+  // ✅ remove meta aplicada pra recalcular total sem cupom
+  setAppliedCouponMeta(null);
+
+  // ✅ ao entrar em edição (veio de "applied"), já remove cupom no Pix e regera o QR
+  setTimeout(() => {
+    refreshPixWithCoupon(null);
+  }, 0);
+}
+
+function cancelCouponEdit() {
+  setCouponError(null);
+  setCouponValidating(false);
+
+  if (lastAppliedRef.current) {
+    setCoupon(lastAppliedRef.current);
+    setCouponMode("applied");
+    // ✅ mantém meta aplicada (não mexe)
+    return;
+  }
+
+  setAppliedCouponMeta(null);
+  setCouponMode("closed");
+}
+
+ async function validateCoupon(rawValue?: string) {
+  const source = typeof rawValue === "string" ? rawValue : coupon;
+  const code = source.trim().toUpperCase();
+
+  // apagou => remove e regera Pix se já tiver QR
+  if (!code) {
     setCouponError(null);
     setCouponValidating(false);
-    setCouponMode("editing");
 
-    // ✅ ao entrar em edição (veio de "applied"), já remove cupom no Pix e regera o QR
+    lastAppliedRef.current = "";
+    setCoupon("");
+    setCouponMode("closed");
+
+    setAppliedCouponMeta(null);
+
     setTimeout(() => {
       refreshPixWithCoupon(null);
     }, 0);
+
+    return;
   }
 
-  function cancelCouponEdit() {
-    setCouponError(null);
-    setCouponValidating(false);
+  setCouponError(null);
+  setCouponValidating(true);
 
-    if (lastAppliedRef.current) {
-      setCoupon(lastAppliedRef.current);
-      setCouponMode("applied");
-      return;
+  try {
+    const res = await fetch(
+      `/api/pagment/cupom?code=${encodeURIComponent(code)}`,
+      {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      },
+    );
+
+    const j = await res.json().catch(() => null);
+
+    if (!res.ok || !j?.ok) {
+      throw new Error(j?.message || "Falha ao validar cupom.");
     }
-    setCouponMode("closed");
-  }
 
-  function validateCoupon(rawValue?: string) {
-    const source = typeof rawValue === "string" ? rawValue : coupon;
-    const code = source.trim().toUpperCase();
-
-    //  se apagou o cupom => remove e (se pix já gerado) regera com valor cheio
-    if (!code) {
-      setCouponError(null);
+    if (!j.valid) {
       setCouponValidating(false);
-
-      lastAppliedRef.current = "";
-      setCoupon("");
-      setCouponMode("closed");
-
-      setTimeout(() => {
-        refreshPixWithCoupon(null);
-      }, 0);
-
-      return;
-    }
-
-    if (TEST_COUPON_ENABLED && code === TEST_COUPON_CODE) {
-      lastAppliedRef.current = code;
-      setCoupon(code);
-      setCouponMode("applied");
-
-      setTimeout(() => {
-        refreshPixWithCoupon(code);
-      }, 0);
-
-      return;
-    }
-
-    setCouponError(null);
-    setCouponValidating(true);
-
-    window.setTimeout(() => {
-      setCouponValidating(false);
-
-      if (TEST_COUPON_ENABLED && code === TEST_COUPON_CODE) {
-        lastAppliedRef.current = code;
-        setCoupon(code);
-        setCouponMode("applied");
-        return;
-      }
-
-      setCouponError("Cupom inválido ou indisponível.");
+      setCouponError(j?.message || "Cupom inválido ou indisponível.");
       setCouponMode("editing");
       setTimeout(() => couponRef.current?.focus(), 10);
-    }, 520);
+      return;
+    }
+
+    // ✅ válido
+    lastAppliedRef.current = code;
+    setCoupon(code);
+    setCouponMode("applied");
+
+    setAppliedCouponMeta({
+      code,
+      source: j.source,
+      discount: {
+        kind: j.discount?.kind,
+        percent: j.discount?.percent ?? null,
+        amount_cents: j.discount?.amount_cents ?? null,
+        target_total_cents: j.discount?.target_total_cents ?? null,
+      },
+    });
+
+    setCouponValidating(false);
+
+    setTimeout(() => {
+      refreshPixWithCoupon(code);
+    }, 0);
+  } catch {
+    setCouponValidating(false);
+    setCouponError("Cupom inválido ou indisponível.");
+    setCouponMode("editing");
+    setTimeout(() => couponRef.current?.focus(), 10);
   }
+}
 
   function validateEmailField(v: string) {
     const ok = isValidEmail(v);
@@ -2656,21 +2808,21 @@ export default function Pay({
         planTitle,
         planDescription,
         payer:
-          methodToCreate === "pix"
-            ? { cpf: onlyDigits(pixCpf), name: pixName }
-            : {
-                email: boletoEmail,
-                cpf: onlyDigits(boletoCpf),
-                name: boletoName,
-                address: {
-                  zip_code: onlyDigits(boletoZip),
-                  street_name: boletoStreetName,
-                  street_number: boletoStreetNumber,
-                  neighborhood: boletoNeighborhood,
-                  city: boletoCity,
-                  federal_unit: boletoUF,
-                },
-              },
+  methodToCreate === "pix"
+    ? { email: discordEmail, cpf: onlyDigits(pixCpf), name: pixName }
+    : {
+        email: boletoEmail,
+        cpf: onlyDigits(boletoCpf),
+        name: boletoName,
+        address: {
+          zip_code: onlyDigits(boletoZip),
+          street_name: boletoStreetName,
+          street_number: boletoStreetNumber,
+          neighborhood: boletoNeighborhood,
+          city: boletoCity,
+          federal_unit: boletoUF,
+        },
+      },
 
         send_email: methodToCreate === "boleto",
         coupon: couponMode === "applied" ? coupon.trim() : null,
@@ -2914,6 +3066,21 @@ export default function Pay({
           setPixCopyPaste(data.qr_code || "");
           setPixPaymentId(id);
 
+          if (couponMode === "applied" && coupon.trim()) {
+  fetch("/api/pagment/cupom", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    credentials: "include",
+    cache: "no-store",
+    body: JSON.stringify({
+      action: "claim",
+      code: coupon.trim(),
+      payment_id: id,
+      order_id: data.order_id || null,
+    }),
+  }).catch(() => {});
+}
+
           if (id) startPollingPayment(id, "pix");
 
           // some inputs, aparece bloco do QR
@@ -2934,65 +3101,20 @@ export default function Pay({
         return;
       }
 
-      // Etapa 2: “Confirmar e Pagar” (força 1 fetch de status agora)
-      if (pixStep === "qr") {
-        if (!pixPaymentId) return;
+// Etapa 2: agora o botão fica travado em "Aguardando Pagamento".
+// Só fica clicável se falhar (cancelado/expirado/recusado) => "Tentar novamente" e regenera.
+if (pixStep === "qr") {
+  const failed =
+    liveStatus === "cancelled" ||
+    liveStatus === "expired" ||
+    liveStatus === "rejected";
 
-        setActionState("loading");
-        try {
-          const r = await fetch(
-            `/api/pagment?id=${encodeURIComponent(pixPaymentId)}`,
-            {
-              method: "GET",
-              headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json",
-              },
-              credentials: "include",
-              cache: "no-store",
-            },
-          );
+  if (failed) {
+    await refreshPixWithCoupon(couponMode === "applied" ? coupon.trim() : null);
+  }
 
-          if (r.status === 401 || r.status === 403) {
-            setActionState("error");
-            setLiveStatusDetail(
-              "Sessão expirada ou sem permissão (403). Faça login novamente e gere o Pix de novo.",
-            );
-            actionTimerRef.current = window.setTimeout(
-              () => setActionState("idle"),
-              1200,
-            );
-            return;
-          }
-
-          const j = await r.json().catch(() => null);
-
-          if (j?.ok) {
-            const status = String(j.status || "");
-            const detail = j.status_detail ? String(j.status_detail) : null;
-
-            setLiveStatus((status as any) || "pending");
-            setLiveStatusDetail(detail);
-
-            if (j.qr_code_base64 && !pixQrBase64)
-              setPixQrBase64(j.qr_code_base64);
-            if (j.qr_code && !pixCopyPaste) setPixCopyPaste(j.qr_code);
-
-            if (status === "approved") {
-              setActionState("success");
-              // opcional: fechar modal quando aprovado
-              // onClose();
-            } else {
-              setActionState("idle");
-            }
-          } else {
-            setActionState("idle");
-          }
-        } catch {
-          setActionState("idle");
-        }
-        return;
-      }
+  return;
+}
     }
   }
 
@@ -3255,11 +3377,11 @@ export default function Pay({
                                               cancelCouponEdit();
                                             }
                                           }}
-                                          placeholder="Digite seu cupom"
+                                          placeholder="Digite seu código de apoiador"
                                           className="h-full w-full bg-transparent pl-3 pr-[68px] text-[12px] text-white/85 outline-none placeholder:text-white/35"
                                         />
 
-                                        <div className="absolute right-1 top-1/2 -translate-y-1/2">
+                                        <div className="absolute right-0.5 top-1/2 -translate-y-1/2">
                                           {couponValidating ? (
                                             <div
                                               className="h-[36px] w-[44px] rounded-lg border border-white/10 bg-white/[0.03]
@@ -3558,24 +3680,31 @@ export default function Pay({
                                 className="mt-6 w-full min-w-0"
                               >
                                 <Field
-                                  ref={emailRef}
-                                  label="E-mail"
-                                  placeholder="seuemail@exemplo.com"
-                                  value={email}
-                                  onChange={(v) => {
-                                    setEmail(v);
-                                    if (emailError) setEmailError(null);
-                                  }}
-                                  onBlur={() =>
-                                    setEmailError(validateEmailField(email))
-                                  }
-                                  error={emailError}
-                                  type="email"
-                                  autoComplete="email"
-                                  name="email"
-                                  inputClassName=""
-                                  shakeSignal={shakeSignal}
-                                />
+  ref={emailRef}
+  label="E-mail"
+  placeholder="seuemail@exemplo.com"
+  value={email}
+  onChange={(v) => {
+    cardEmailTouchedRef.current = true; // ✅ usuário mexeu
+    setEmail(v);
+    if (emailError) setEmailError(null);
+  }}
+  onBlur={() => {
+    const v = String(email || "");
+    // ✅ se ele não tocou e ainda tá vazio, não mostra erro
+    if (!cardEmailTouchedRef.current && !v.trim()) {
+      setEmailError(null);
+      return;
+    }
+    setEmailError(validateEmailField(v));
+  }}
+  error={emailError}
+  type="email"
+  autoComplete="email"
+  name="email"
+  inputClassName=""
+  shakeSignal={shakeSignal}
+/>
 
                                 <div className="mt-4">
                                   <Field
@@ -3888,55 +4017,59 @@ export default function Pay({
                                 {/* Campos necessários pro Pix real (agora: Nome + CPF; email vem do cookie) */}
                                 <div className="w-full rounded-2xl border border-white/10 bg-black/25 p-5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
                                   {/* SUCESSO: limpa tudo e mostra confirmado */}
-                                  {pixStep === "success" ? (
-                                    <div className="py-10 flex flex-col items-center text-center">
-                                      <motion.div
-                                        initial={{
-                                          opacity: 0,
-                                          y: 10,
-                                          scale: 0.98,
-                                        }}
-                                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                                        transition={{
-                                          duration: 0.28,
-                                          ease: "easeOut",
-                                        }}
-                                        className="text-[18px] font-semibold text-white"
-                                      >
-                                        Pagamento Confirmado
-                                      </motion.div>
+                                 {pixStep === "success" ? (
+  <div className="py-10 flex flex-col items-center text-center">
+    ...
+  </div>
+) : pixStep === "qr" &&
+  (liveStatus === "cancelled" ||
+    liveStatus === "expired" ||
+    liveStatus === "rejected") ? (
+  <div className="py-10 flex flex-col items-center text-center">
+    <motion.div
+      initial={{ opacity: 0, y: 10, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.28, ease: "easeOut" }}
+      className="text-[18px] font-semibold text-white"
+    >
+      {liveStatus === "expired"
+        ? "Pagamento Expirado"
+        : liveStatus === "cancelled"
+          ? "Pagamento Cancelado"
+          : "Pagamento Recusado"}
+    </motion.div>
 
-                                      <motion.div
-                                        initial={{ opacity: 0, scale: 0.92 }}
-                                        animate={{ opacity: 1, scale: 1 }}
-                                        transition={{
-                                          duration: 0.35,
-                                          ease: "easeOut",
-                                          delay: 0.05,
-                                        }}
-                                        className="mt-6"
-                                      >
-                                        <div className="relative">
-                                          <div className="absolute inset-0 rounded-full bg-emerald-400/10 blur-2xl" />
-                                          <div className="relative rounded-full border border-white/10 bg-white/[0.03] p-5 shadow-[0_18px_55px_rgba(0,0,0,0.55)]">
-                                            <IconCheckCircleGreen className="h-[170px] w-[170px]" />
-                                          </div>
-                                        </div>
-                                      </motion.div>
+    <motion.div
+      initial={{ opacity: 0, scale: 0.92 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.35, ease: "easeOut", delay: 0.05 }}
+      className="mt-6"
+    >
+      <div className="relative">
+        <div className="absolute inset-0 rounded-full bg-red-500/10 blur-2xl" />
+        <div className="relative rounded-full border border-white/10 bg-white/[0.03] p-5 shadow-[0_18px_55px_rgba(0,0,0,0.55)]">
+          <IconXCircleRed className="h-[170px] w-[170px]" />
+        </div>
+      </div>
+    </motion.div>
 
-                                      <div className="mt-4 max-w-[380px] text-[12px] leading-relaxed text-white/55">
-                                        Recebemos seu pagamento via{" "}
-                                        <span className="text-white/80 font-semibold">
-                                          Pix
-                                        </span>
-                                        . Seu acesso será liberado{" "}
-                                        <span className="text-white/80 font-semibold">
-                                          imediatamente
-                                        </span>
-                                        .
-                                      </div>
-                                    </div>
-                                  ) : (
+    <div className="mt-4 max-w-[380px] text-[12px] leading-relaxed text-white/55">
+      {liveStatus === "expired"
+        ? "O QR Code expirou. Clique em "
+        : liveStatus === "cancelled"
+          ? "Este Pix foi cancelado. Clique em "
+          : "O pagamento foi recusado. Clique em "}
+      <span className="text-white/80 font-semibold">Tentar novamente</span>
+      {" "}para gerar um novo Pix.
+    </div>
+
+    {!!liveStatusDetail && (
+      <div className="mt-3 max-w-[420px] text-[11px] text-white/40">
+        {liveStatusDetail}
+      </div>
+    )}
+  </div>
+) : (
                                     <>
                                       {/* CABEÇALHO normal (só quando não é success) */}
                                       <div className="flex items-start justify-between gap-4">
@@ -3954,8 +4087,8 @@ export default function Pay({
                                               Email:
                                             </span>{" "}
                                             <span className="text-white/30 border-white/10 bg-white/[0.03] p-1 rounded-md">
-                                              {discordEmail || "—"}
-                                            </span>
+  {discordEmail ? discordEmail : "Carregando…"}
+</span>
                                           </div>
 
                                           {!!pixErrors.email && (
@@ -4218,8 +4351,8 @@ export default function Pay({
                                       </div>
                                     </div>
                                     <div className="flex h-10 w-12 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
-                                      <IconBoleto className="text-white/80" />
-                                    </div>
+  <BoletoImg className="h-[14px] w-[22px] opacity-90" />
+</div>
                                   </div>
 
                                   {/* TELA DE CONFIRMAÇÃO (mostra quando já existe boletoPaymentId) */}
@@ -4240,9 +4373,9 @@ export default function Pay({
                                               .
                                             </div>
                                           </div>
-                                          <div className="flex h-9 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
-                                            <IconBoleto className="text-white/80" />
-                                          </div>
+                                         <div className="flex h-9 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
+  <BoletoImg className="h-[13px] w-[20px] opacity-90" />
+</div>
                                         </div>
 
                                         {/* Mantive seu bloco de confirmação original, inteiro */}

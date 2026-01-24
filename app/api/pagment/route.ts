@@ -10,7 +10,7 @@ type Billing = "monthly" | "annual";
 type Method = "card" | "pix" | "boleto";
 
 const PLAN_PRICES: Record<Billing, Record<Plan, number>> = {
-  monthly: { starter: 14.9, pro: 19.9, premium: 24.99 },
+  monthly: { starter: 14.9, pro: 19.9, premium: 22.99 },
   annual: { starter: 12.49, pro: 16.59, premium: 20.79 }, // <- "por mês" (psicológico no card)
 };
 
@@ -695,6 +695,7 @@ const intentStore = new Map<
 function makeIntentKey(order_id: string, revision: number, method: Method) {
   return `${order_id}::${revision}::${method}`;
 }
+
 
 function getIntent(key: string) {
   const it = intentStore.get(key);
